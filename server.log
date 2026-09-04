@@ -1,0 +1,289 @@
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Serving Flask app 'server'
+ * Debug mode: on
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [03/Sep/2026 23:43:54] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:44:20] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:44:20] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:44:39] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:46:06] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:46:06] "GET /static/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:46:06] "GET /static/app.js HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:46:12] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:47:18] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:48:55] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:55:14] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [03/Sep/2026 23:56:29] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 00:04:21] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 00:04:58] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:05:11] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:05:11] "POST /api/chat HTTP/1.1" 400 -
+127.0.0.1 - - [04/Sep/2026 00:07:48] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 00:07:48] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 00:07:48] "GET /static/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 00:07:50] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:07:56] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:08:25] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:09:57] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:10:26] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:23:16] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:28:27] "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 - - [04/Sep/2026 00:28:28] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 00:28:28] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 00:28:28] "GET /static/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 00:28:28] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:28:29] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:28:45] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:28:54] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:29:01] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:29:08] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:29:24] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:30:54] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:32:38] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:33:45] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:33:54] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:34:08] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:34:14] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:34:24] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:34:29] "POST /api/chat HTTP/1.1" 502 -
+127.0.0.1 - - [04/Sep/2026 00:35:05] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:35:12] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:36:47] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 00:40:19] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 01:12:40] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 01:12:40] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 01:12:40] "GET /static/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 01:12:40] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 08:38:01] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 08:38:01] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 08:38:01] "GET /static/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 08:38:10] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:01:20] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 14:01:20] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 14:01:20] "GET /static/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 14:01:21] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:01:35] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:02:10] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:02:14] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:02:17] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:02:28] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:02:58] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:03:37] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:04:16] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:04:59] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:05:36] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:07:28] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:08:05] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:10:55] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:11:11] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:13:45] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:14:04] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:17:04] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 14:17:13] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:29:19] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:29:40] "POST /api/chat HTTP/1.1" 502 -
+127.0.0.1 - - [04/Sep/2026 15:32:01] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:16] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:17] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:18] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:29] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:30] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:42] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 15:40:42] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 15:40:42] "GET /static/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 15:40:42] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 15:40:46] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:11:15] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:11:24] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:12:19] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 16:54:09] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:54:24] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:55:16] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:55:29] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 16:55:55] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:05:45] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 17:05:45] "GET /static/style.css HTTP/1.1" 304 -
+127.0.0.1 - - [04/Sep/2026 17:05:45] "GET /static/app.js HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:05:46] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:05:57] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:06:53] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 17:26:59] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:03] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:04] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:07] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:11] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:12] "POST /api/chat HTTP/1.1" 502 -
+127.0.0.1 - - [04/Sep/2026 17:27:19] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:20] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:27:36] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 17:27:52] "POST /api/chat HTTP/1.1" 400 -
+127.0.0.1 - - [04/Sep/2026 17:28:01] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:28:10] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 17:32:02] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:32:11] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:33:24] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:46:17] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:48:00] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:49:25] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 17:52:03] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+127.0.0.1 - - [04/Sep/2026 18:30:00] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:30:22] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:30:50] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:31:03] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:31:20] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:31:50] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:32:05] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:33:17] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:33:35] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:33:52] "POST /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:34:04] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:39:05] "POST /api/chat HTTP/1.1" 502 -
+127.0.0.1 - - [04/Sep/2026 18:40:10] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 18:40:36] "POST /api/chat HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 19:01:08] "POST /api/upload HTTP/1.1" 200 -
+127.0.0.1 - - [04/Sep/2026 19:01:33] "POST /api/chat HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+C:\Users\pranav\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+ * Debugger is active!
+ * Debugger PIN: 697-895-990
+ * Detected change in 'C:\\Users\\pranav\\Desktop\\data_extractor\\server.py', reloading
+ * Restarting with stat
+  File "C:\Users\pranav\Desktop\data_extractor\server.py", line 40
+    REQUEST_TIMEOUT = 300
+IndentationError: unexpected indent

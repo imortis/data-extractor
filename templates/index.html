@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Data Extractor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">◈</span>
+        <div class="brand-text">
+          <span class="brand-title">Data Extractor</span>
+          <span class="brand-sub">image &amp; document → structured JSON</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="status-pill" class="status-pill status-unknown"><span class="dot-pulse"></span>checking…</span>
+        <button id="settings-btn" class="icon-btn" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-row">
+        <label for="host-input">Ollama host (ngrok URL)</label>
+        <input id="host-input" type="text" placeholder="https://your-domain.ngrok-free.dev" />
+      </div>
+      <div class="settings-row">
+        <label for="model-input">Model</label>
+        <input id="model-input" type="text" placeholder="qwen3.8:27b" />
+      </div>
+      <div class="settings-row settings-actions">
+        <button id="test-conn-btn" class="btn">Test connection</button>
+        <button id="save-settings-btn" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+
+    <main id="chat" class="chat">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">✨</div>
+        <h2>Drop in anything to extract structured data</h2>
+        <p>Images, PDFs, Word docs, Excel sheets, PowerPoint, CSV or text — the model classifies it and returns clean structured JSON with everything important. It can even call a <code>read_file</code> tool to pull more of a document if needed.</p>
+        <div class="chip-row">
+          <span class="type-chip">🖼️ image</span>
+          <span class="type-chip">📄 pdf</span>
+          <span class="type-chip">📝 docx</span>
+          <span class="type-chip">📊 xlsx</span>
+          <span class="type-chip">📈 pptx</span>
+          <span class="type-chip">🧾 csv</span>
+          <span class="type-chip">🗒️ txt</span>
+        </div>
+      </div>
+    </main>
+
+    <div id="drop-overlay" class="drop-overlay hidden">
+      <div class="drop-overlay-inner">
+        <div class="drop-icon">⬇</div>
+        <div>Drop files to attach</div>
+      </div>
+    </div>
+
+    <footer class="composer">
+      <div id="attachments-row" class="attachments-row hidden"></div>
+      <div class="composer-inner">
+        <button id="attach-btn" class="icon-btn" title="Attach files">📎</button>
+        <input id="file-input" type="file" accept="image/*,.pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.txt,.md,.json,.log" hidden multiple />
+        <textarea id="text-input" rows="1" placeholder="Add instructions (optional) and press Enter…"></textarea>
+        <button id="send-btn" class="send-btn" title="Send">
+          <span class="send-icon">➤</span>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
