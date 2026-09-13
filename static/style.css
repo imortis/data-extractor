@@ -328,7 +328,49 @@ html, body {
 
 .summary-line { font-size: 14px; color: var(--text); line-height: 1.5; }
 
-.json-toolbar { display: flex; justify-content: flex-end; }
+.json-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.btn-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.saved-tag {
+  font-size: 11px;
+  color: var(--green);
+  background: rgba(79, 214, 153, 0.1);
+  border: 1px solid rgba(79, 214, 153, 0.25);
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.saved-tag-btn {
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.saved-tag-btn:hover {
+  background: rgba(79, 214, 153, 0.2);
+  border-color: rgba(79, 214, 153, 0.45);
+  transform: translateY(-1px);
+}
+.saved-tag .open-arrow {
+  font-size: 10px;
+  opacity: 0.7;
+}
+.saved-tag .path-code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  color: #a8e6a1;
+  background: transparent;
+  padding: 0;
+}
 .copy-btn {
   font-size: 11px;
   background: var(--bg-input);
@@ -338,8 +380,52 @@ html, body {
   border-radius: 7px;
   cursor: pointer;
   transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .copy-btn:hover { color: var(--text); background: var(--border-strong); }
+.export-btn {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: rgba(124, 158, 255, 0.3);
+}
+.export-btn:hover {
+  background: rgba(124, 158, 255, 0.25);
+  color: white;
+}
+.save-db-btn {
+  color: #4fd699;
+  background: rgba(79, 214, 153, 0.1);
+  border-color: rgba(79, 214, 153, 0.3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.save-db-btn:hover:not(:disabled) {
+  background: rgba(79, 214, 153, 0.2);
+  border-color: rgba(79, 214, 153, 0.5);
+  color: #fff;
+}
+.save-db-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.save-db-btn--success {
+  color: #4fd699 !important;
+  background: rgba(79, 214, 153, 0.15) !important;
+  border-color: rgba(79, 214, 153, 0.4) !important;
+}
+.db-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(79, 214, 153, 0.35);
+  border-top-color: #4fd699;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
 
 pre.json-view {
   background: rgba(0,0,0,0.35);

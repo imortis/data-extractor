@@ -21,6 +21,7 @@ Backend for the image / document data-extraction chat UI.
 
 import base64
 import csv
+import datetime
 import io
 import json
 import os
@@ -31,6 +32,31 @@ import zipfile
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory
+
+# --- MongoDB Atlas setup ---
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass  # python-dotenv not installed, rely on real env vars
+
+try:
+    from pymongo import MongoClient
+    from pymongo.errors import ConnectionFailure, OperationFailure
+    _MONGO_URI = os.environ.get("MONGO_URI", "")
+    _MONGO_DB  = os.environ.get("MONGO_DB", "data_extractor")
+    if _MONGO_URI:
+        _mongo_client = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=5000)
+        _mongo_db = _mongo_client[_MONGO_DB]
+        print(f"[MongoDB] Connected to db '{_MONGO_DB}' on Atlas")
+    else:
+        _mongo_client = None
+        _mongo_db = None
+        print("[MongoDB] No MONGO_URI set — Atlas saving disabled")
+except Exception as _mongo_err:
+    _mongo_client = None
+    _mongo_db = None
+    print(f"[MongoDB] Init error: {_mongo_err}")
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024  # 30MB per upload
@@ -54,24 +80,33 @@ FILES = {}
 
 SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you may be given an image and/or one or more attached documents (PDF, Word, Excel, PowerPoint, CSV, text). Some attachments include real images for you to look at, not just extracted text: scanned PDFs (little or no text layer) are rendered to page images, and pictures embedded inside Word/Excel/PowerPoint files are attached directly. Always read any attached images visually — they may contain the ONLY copy of the information (e.g. a scanned page has no text layer at all) or extra detail the text layer missed (stamps, signatures, charts, photos, handwriting). Your job:
 
-1. Classify the overall content into exactly one category (closest match; use "other" only if nothing fits):
-   document, receipt_or_invoice, id_card, form, screenshot, chart_or_graph, table, handwritten_note, photo, diagram, business_card, spreadsheet, presentation, report, contract, resume, code, other
+1. Classify the overall content into EXACTLY ONE PRECISE category from this list:
+   certificate, circular, offer_letter, resume, id_card, receipt_or_invoice, contract, form, report, letter, announcement, spreadsheet, presentation, table, chart_or_graph, code, handwritten_note, photo, screenshot, business_card, other_document, other
+
+   Classification Guidelines:
+   - "certificate": Diplomas, course completion certificates, awards, licenses, degrees, achievement or participation certificates.
+   - "circular": Official government/university/company circulars, notices, academic memos, public directives, administrative bulletins.
+   - "offer_letter": Job offers, appointment letters, internship offers, wage/salary letters, promotion letters.
+   - "resume": CVs, resumes, bio-data, professional portfolios.
+   - "id_card": Government IDs (Passport, Driver License, Aadhaar, PAN, Voter ID), student/employee ID badges.
+   - "receipt_or_invoice": Bills, payment receipts, tax invoices, purchase orders, order confirmations.
+   - "contract": NDAs, service agreements, lease/rental agreements, terms of service.
+   - DO NOT classify as generic "other_document" if it matches specific categories like certificate, circular, offer_letter, resume, id_card, or invoice.
 
 2. Extract ONLY the key, important information a human would actually want at a glance — not a transcription of the whole thing. Shape "key_info" to fit the content, e.g.:
-   - receipt/invoice → vendor, date, total, a few notable line items (not every line)
-   - id_card → name, id_number, dob, expiry
-   - chart → title, trend/takeaway, 2-3 standout data points (not the full data table)
-   - spreadsheet → sheet_names, row_count, the handful of figures that matter (not the whole sheet)
-   - resume → name, role/title, top skills, most recent role
-   - announcement/notice/letter → subject, who it's from, the one key date/action, the core message in a phrase
-   - form → only the filled-in field values, not blank fields or instructions
+   - certificate → recipient_name, issuing_organization, certificate_title/course_name, issue_date, credential_id/grade/distinction
+   - circular → circular_number/id, issuing_authority/department, title/subject, issue_date, effective_date, target_audience, key_directive/action_required
+   - offer_letter → candidate_name, company_name, job_title/designation, joining_date, compensation/salary, work_location
+   - resume → name, role/title, top_skills, experience_years, latest_organization/education
+   - receipt/invoice → vendor, invoice_number, date, total_amount, tax, payment_status
+   - id_card → name, id_type, id_number, dob, expiry_date, address
 
-3. If a document's content appears truncated ("...[truncated, N more characters]"), you may call the read_file tool with the file's id to fetch more of it before answering. If a PDF note says specific additional pages are NOT yet attached, you may call get_pdf_page_image(file_id, page_number) to see one of those specific pages. Never call a tool to re-fetch content already given to you in this same message (e.g. a page image already attached) — check what's already provided before calling anything.
+3. If a document's content appears truncated ("...[truncated, N more characters]"), you may call the read_file tool with the file's id to fetch more of it before answering. If a PDF note says specific additional pages are NOT yet attached, you may call get_pdf_page_image(file_id, page_number) to see one of those specific pages. Never call a tool to re-fetch content already given to you in this same message.
 
 4. Reply with ONLY a single valid JSON object — no markdown fences, no commentary, no <think> tags, nothing before or after the JSON. Use exactly this shape:
 
 {
-  "image_type": "<one category from the list above>",
+  "image_type": "<one precise category from the list above>",
   "confidence": <float 0-1>,
   "summary": "<one sentence describing the content>",
   "key_info": { <at most 8 of the most important fields, snake_case keys, short values> }
@@ -82,7 +117,7 @@ Rules:
 - Never invent data that isn't visible in the image or present in the document text.
 - If a field is unreadable or absent, omit it or set it to null — never guess.
 - key_info must have at most 8 fields. Prioritize the most important ones; drop the rest rather than padding.
-- Values should be short (a word, number, date, or short phrase) — not full paragraphs or verbatim quotes, except where a short exact quote is the point (e.g. a title, an ID number, an amount).
+- Values should be short (a word, number, date, or short phrase) — not full paragraphs or verbatim quotes.
 - Output must be strictly valid JSON, parseable by a strict parser. /no_think"""
 
 READ_FILE_TOOL = {
@@ -631,8 +666,24 @@ def chat():
 
     parsed = None
     parse_error = None
+    category = None
+    original_filename = "document.json"
+
     try:
         parsed = extract_json(raw_content)
+        if isinstance(parsed, dict):
+            # Extract category identified by the model
+            category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
+            
+            # Determine source filename prefix if available
+            orig_name = "document"
+            if attachments and len(attachments) > 0:
+                first_att = attachments[0]
+                orig_name = first_att.get("filename") or FILES.get(first_att.get("file_id"), {}).get("filename", "document")
+            name_base = os.path.splitext(os.path.basename(orig_name))[0]
+            clean_name = re.sub(r"[^\w\-_]", "_", name_base).strip("_") or "extracted"
+            original_filename = f"{clean_name}.json"
+
     except json.JSONDecodeError as exc:
         parse_error = str(exc)
 
@@ -644,9 +695,114 @@ def chat():
             "parse_error": parse_error,
             "elapsed_seconds": elapsed,
             "tools_used": tools_used,
+            "category": category,
+            "original_filename": original_filename,
         }
     )
 
+
+
+@app.route("/api/save-to-db", methods=["POST"])
+def save_to_db():
+    """Save extracted JSON into the appropriate MongoDB Atlas collection by category."""
+    if _mongo_db is None:
+        return jsonify({"ok": False, "error": "MongoDB is not configured. Check your MONGO_URI in .env"}), 503
+
+    body = request.get_json(force=True) or {}
+    parsed = body.get("parsed")
+    category = body.get("category")
+    filename = body.get("filename", "unknown")
+
+    if not parsed:
+        return jsonify({"ok": False, "error": "No parsed JSON data provided"}), 400
+    if not isinstance(parsed, dict):
+        return jsonify({"ok": False, "error": "Parsed data must be a JSON object"}), 400
+
+    # Derive collection name from category (fall back to image_type inside the doc)
+    if not category:
+        category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
+    collection_name = re.sub(r"[^\w]", "_", category).strip("_") or "other"
+
+    # Build the record to insert
+    record = {
+        "source_filename": filename,
+        "category": category,
+        "saved_at": datetime.datetime.utcnow(),
+        "extracted_data": parsed,
+    }
+
+    try:
+        collection = _mongo_db[collection_name]
+        result = collection.insert_one(record)
+        inserted_id = str(result.inserted_id)
+        print(f"[MongoDB] Saved '{filename}' -> db={_MONGO_DB}, collection={collection_name}, id={inserted_id}")
+        return jsonify({
+            "ok": True,
+            "collection": collection_name,
+            "inserted_id": inserted_id,
+            "db": _MONGO_DB,
+        })
+    except (ConnectionFailure, OperationFailure) as exc:
+        return jsonify({"ok": False, "error": f"MongoDB error: {exc}"}), 500
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/save-local", methods=["POST"])
+def save_local():
+    """Save extracted JSON to a local folder based on category."""
+    body = request.get_json(force=True) or {}
+    parsed = body.get("parsed")
+    category = body.get("category")
+    filename = body.get("filename", "document.json")
+
+    if not parsed or not isinstance(parsed, dict):
+        return jsonify({"ok": False, "error": "Invalid parsed JSON data"}), 400
+
+    if not category:
+        category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
+    
+    category_slug = re.sub(r"[^\w\-_]", "_", category).replace("__", "_").strip("_") or "other"
+    
+    name_base = os.path.splitext(os.path.basename(filename))[0]
+    clean_name = re.sub(r"[^\w\-_]", "_", name_base).strip("_") or "extracted"
+    
+    category_dir = os.path.join(os.path.dirname(__file__), "exports", category_slug)
+    os.makedirs(category_dir, exist_ok=True)
+    
+    save_filename = f"{clean_name}.json"
+    full_save_path = os.path.join(category_dir, save_filename)
+    
+    try:
+        with open(full_save_path, "w", encoding="utf-8") as f:
+            json.dump(parsed, f, indent=2, ensure_ascii=False)
+        saved_path = os.path.relpath(full_save_path, os.path.dirname(__file__)).replace("\\", "/")
+        print(f"[Export] Saved locally: {saved_path}")
+        return jsonify({"ok": True, "saved_path": saved_path})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/open-folder", methods=["POST"])
+def open_folder():
+    """Open the local exports folder in Windows Explorer."""
+    data = request.get_json(force=True) or {}
+    rel_path = data.get("path")
+    if not rel_path:
+        target_dir = os.path.join(os.path.dirname(__file__), "exports")
+    else:
+        full_path = os.path.join(os.path.dirname(__file__), rel_path)
+        if os.path.isfile(full_path):
+            target_dir = os.path.dirname(full_path)
+        else:
+            target_dir = full_path
+
+    os.makedirs(target_dir, exist_ok=True)
+    try:
+        os.startfile(target_dir)
+        return jsonify({"ok": True, "opened": target_dir})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

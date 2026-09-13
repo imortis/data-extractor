@@ -329,6 +329,10 @@ function renderResult(row, data) {
 
     const toolbar = document.createElement("div");
     toolbar.className = "json-toolbar";
+
+    const btnGroup = document.createElement("div");
+    btnGroup.className = "btn-group";
+
     const copyBtn = document.createElement("button");
     copyBtn.className = "copy-btn";
     copyBtn.textContent = "Copy JSON";
@@ -337,7 +341,100 @@ function renderResult(row, data) {
       copyBtn.textContent = "Copied!";
       setTimeout(() => (copyBtn.textContent = "Copy JSON"), 1200);
     });
-    toolbar.appendChild(copyBtn);
+    btnGroup.appendChild(copyBtn);
+
+    // --- Save to Local button ---
+    const saveLocalBtn = document.createElement("button");
+    saveLocalBtn.className = "copy-btn export-btn";
+    saveLocalBtn.innerHTML = `📁 Save to Local`;
+    saveLocalBtn.addEventListener("click", async () => {
+      saveLocalBtn.disabled = true;
+      saveLocalBtn.textContent = `Saving…`;
+      const filename = data.original_filename || ((data.category || "document") + ".json");
+      try {
+        const res = await fetch("/api/save-local", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            parsed: data.parsed,
+            category: data.category,
+            filename,
+          }),
+        });
+        const result = await res.json();
+        if (result.ok) {
+          saveLocalBtn.textContent = `✓ Saved`;
+          
+          // Add the open folder badge if it doesn't exist
+          if (!toolbar.querySelector(".saved-tag-btn")) {
+            const openFolderBtn = document.createElement("button");
+            openFolderBtn.className = "saved-tag saved-tag-btn";
+            openFolderBtn.title = `Click to open this folder in Windows Explorer`;
+            openFolderBtn.innerHTML = `📁 Saved to <code class="path-code">${escapeHtml(result.saved_path)}</code> <span class="open-arrow">↗</span>`;
+            openFolderBtn.addEventListener("click", async () => {
+              try {
+                await fetch("/api/open-folder", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ path: result.saved_path }),
+                });
+              } catch (err) {
+                console.error("Failed to open folder:", err);
+              }
+            });
+            toolbar.insertBefore(openFolderBtn, btnGroup);
+          }
+        } else {
+          saveLocalBtn.textContent = `❌ Error`;
+          saveLocalBtn.title = result.error || "Unknown error";
+          saveLocalBtn.disabled = false;
+        }
+      } catch (err) {
+        saveLocalBtn.textContent = `❌ Error`;
+        saveLocalBtn.title = err.message;
+        saveLocalBtn.disabled = false;
+      }
+    });
+    btnGroup.appendChild(saveLocalBtn);
+
+    // --- Save to Database button ---
+    const saveDbBtn = document.createElement("button");
+    saveDbBtn.className = "copy-btn save-db-btn";
+    saveDbBtn.innerHTML = `🗄️ Save to Database`;
+    saveDbBtn.addEventListener("click", async () => {
+      saveDbBtn.disabled = true;
+      saveDbBtn.innerHTML = `<span class="db-spinner"></span> Saving…`;
+      const filename = data.original_filename || ((data.category || "document") + ".json");
+      try {
+        const res = await fetch("/api/save-to-db", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            parsed: data.parsed,
+            category: data.category,
+            filename,
+          }),
+        });
+        const result = await res.json();
+        if (result.ok) {
+          saveDbBtn.innerHTML = `✅ Saved to <strong>${result.collection}</strong>`;
+          saveDbBtn.classList.add("save-db-btn--success");
+        } else {
+          saveDbBtn.innerHTML = `❌ Error`;
+          saveDbBtn.title = result.error || "Unknown error";
+          saveDbBtn.disabled = false;
+          console.error("DB save failed:", result.error);
+        }
+      } catch (err) {
+        saveDbBtn.innerHTML = `❌ Error`;
+        saveDbBtn.title = err.message;
+        saveDbBtn.disabled = false;
+        console.error("DB save request failed:", err);
+      }
+    });
+    btnGroup.appendChild(saveDbBtn);
+
+    toolbar.appendChild(btnGroup);
     card.appendChild(toolbar);
 
     const pre = document.createElement("pre");
