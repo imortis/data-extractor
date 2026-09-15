@@ -109,6 +109,8 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
   "image_type": "<one precise category from the list above>",
   "confidence": <float 0-1>,
   "summary": "<one sentence describing the content>",
+  "primary_name": "<primary person, student, candidate, recipient, company, or issuing authority name>",
+  "concise_topic": "<strictly 2 to 3 words describing the specific topic or document type, e.g. 'Software Engineer Resume', 'Coding Event Participation', 'Cloud Services Invoice'>",
   "key_info": { <at most 8 of the most important fields, snake_case keys, short values> }
 }
 
@@ -116,6 +118,8 @@ Rules:
 - Be concise. Skip boilerplate: letterhead/address blocks, repeated institution names, cc/distribution lists, page footers, blank/unfilled fields, routine sign-offs — include them only if that boilerplate IS the actual point of the request.
 - Never invent data that isn't visible in the image or present in the document text.
 - If a field is unreadable or absent, omit it or set it to null — never guess.
+- primary_name should be the main person or organization's name (e.g. 'Sahitya Chadda', 'Google', 'NatWest').
+- concise_topic MUST be strictly 2 to 3 words describing the core subject, role, or event (e.g. 'Software Engineer Resume', 'Coding Event Participation', 'Cloud Services Invoice', 'Academic Examination Circular').
 - key_info must have at most 8 fields. Prioritize the most important ones; drop the rest rather than padding.
 - Values should be short (a word, number, date, or short phrase) — not full paragraphs or verbatim quotes.
 - Output must be strictly valid JSON, parseable by a strict parser. /no_think"""
@@ -667,7 +671,7 @@ def chat():
     parsed = None
     parse_error = None
     category = None
-    original_filename = "document.json"
+    suggested_filename = "document_data.json"
 
     try:
         parsed = extract_json(raw_content)
@@ -680,9 +684,9 @@ def chat():
             if attachments and len(attachments) > 0:
                 first_att = attachments[0]
                 orig_name = first_att.get("filename") or FILES.get(first_att.get("file_id"), {}).get("filename", "document")
-            name_base = os.path.splitext(os.path.basename(orig_name))[0]
-            clean_name = re.sub(r"[^\w\-_]", "_", name_base).strip("_") or "extracted"
-            original_filename = f"{clean_name}.json"
+            
+            # Generate dynamic filename: name_concisetopicin2-3words.json
+            suggested_filename = generate_suggested_filename(parsed, orig_name)
 
     except json.JSONDecodeError as exc:
         parse_error = str(exc)
@@ -696,10 +700,110 @@ def chat():
             "elapsed_seconds": elapsed,
             "tools_used": tools_used,
             "category": category,
-            "original_filename": original_filename,
+            "suggested_filename": suggested_filename,
+            "original_filename": suggested_filename,
         }
     )
 
+
+def sanitize_token(text: str) -> str:
+    """Keep alphanumeric characters and underscores."""
+    text = re.sub(r"[^\w\s-]", "", str(text or ""))
+    tokens = [t for t in re.split(r"[\s_-]+", text) if t]
+    return "_".join(tokens)
+
+
+def extract_primary_name(parsed: dict, fallback: str = "") -> str:
+    if not isinstance(parsed, dict):
+        return fallback or "document"
+    # Check explicit field from model prompt
+    for field in ("primary_name", "entity_name", "candidate_name", "recipient_name", "name", "full_name"):
+        val = parsed.get(field)
+        if val and isinstance(val, str) and val.strip():
+            return val.strip()
+
+    # Check inside key_info
+    key_info = parsed.get("key_info") or {}
+    if isinstance(key_info, dict):
+        for key in (
+            "recipient_name", "candidate_name", "name", "full_name", "student_name",
+            "employee_name", "vendor", "issuing_organization", "issuing_authority",
+            "company_name", "company", "organization", "author"
+        ):
+            val = key_info.get(key)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+
+    # Fallback to base of uploaded filename if provided
+    if fallback:
+        base = os.path.splitext(os.path.basename(fallback))[0]
+        clean = re.sub(r"[^\w\s-]", "", base).strip()
+        if clean and clean.lower() not in ("document", "extracted", "file", "upload", "unknown", "image"):
+            return clean
+
+    return "document"
+
+
+def extract_concise_topic(parsed: dict, fallback_category: str = "document") -> str:
+    if not isinstance(parsed, dict):
+        return "extracted_data"
+
+    # 1. Check explicit field from model prompt
+    raw_topic = parsed.get("concise_topic") or parsed.get("short_topic") or parsed.get("topic")
+
+    # 2. Check key_info for titles/events/roles
+    if not raw_topic:
+        key_info = parsed.get("key_info") or {}
+        if isinstance(key_info, dict):
+            for key in (
+                "certificate_title", "event_name", "course_name", "job_title",
+                "role", "designation", "title", "subject", "id_type"
+            ):
+                val = key_info.get(key)
+                if val and isinstance(val, str) and val.strip():
+                    raw_topic = val.strip()
+                    break
+
+    # 3. Check summary if available
+    if not raw_topic and parsed.get("summary"):
+        raw_topic = parsed.get("summary")
+
+    # 4. Fall back to category
+    if not raw_topic:
+        raw_topic = parsed.get("image_type") or parsed.get("category") or fallback_category
+
+    words = [w for w in re.findall(r"[A-Za-z0-9]+", str(raw_topic)) if len(w) > 1 or w.isalnum()]
+    stopwords = {"a", "an", "the", "and", "or", "of", "in", "for", "with", "at", "by", "from", "on", "to", "is", "as"}
+    filtered_words = [w for w in words if w.lower() not in stopwords]
+    candidate_words = filtered_words if len(filtered_words) >= 2 else words
+
+    if len(candidate_words) >= 3:
+        selected_words = candidate_words[:3]
+    elif len(candidate_words) == 2:
+        selected_words = candidate_words
+    elif len(candidate_words) == 1:
+        cat = parsed.get("image_type") or fallback_category or "document"
+        cat_words = [w for w in re.findall(r"[A-Za-z0-9]+", str(cat)) if w.lower() != candidate_words[0].lower()]
+        selected_words = candidate_words + (cat_words[:1] if cat_words else ["Doc"])
+    else:
+        selected_words = ["Data", "Doc"]
+
+    return "_".join(w.capitalize() for w in selected_words)
+
+
+def generate_suggested_filename(parsed: dict | None, orig_name: str = "") -> str:
+    """Generate filename adhering to: name_concisetopicin2-3words.json"""
+    if not parsed or not isinstance(parsed, dict):
+        base = os.path.splitext(os.path.basename(orig_name))[0] if orig_name else "document"
+        clean = sanitize_token(base) or "document"
+        return f"{clean}.json"
+
+    primary_name = extract_primary_name(parsed, orig_name)
+    clean_name = sanitize_token(primary_name) or "document"
+    topic = extract_concise_topic(parsed)
+    clean_topic = sanitize_token(topic) or "Data"
+
+    return f"{clean_name}_{clean_topic}.json"
 
 
 @app.route("/api/save-to-db", methods=["POST"])
@@ -711,7 +815,7 @@ def save_to_db():
     body = request.get_json(force=True) or {}
     parsed = body.get("parsed")
     category = body.get("category")
-    filename = body.get("filename", "unknown")
+    filename = body.get("filename", "")
 
     if not parsed:
         return jsonify({"ok": False, "error": "No parsed JSON data provided"}), 400
@@ -723,9 +827,16 @@ def save_to_db():
         category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
     collection_name = re.sub(r"[^\w]", "_", category).strip("_") or "other"
 
+    # Standardize filename format
+    if not filename or filename in ("unknown", "document.json", f"{category}.json", "extracted.json"):
+        filename = generate_suggested_filename(parsed)
+    elif not filename.lower().endswith(".json"):
+        filename = f"{filename}.json"
+
     # Build the record to insert
     record = {
         "source_filename": filename,
+        "saved_filename": filename,
         "category": category,
         "saved_at": datetime.datetime.utcnow(),
         "extracted_data": parsed,
@@ -741,6 +852,7 @@ def save_to_db():
             "collection": collection_name,
             "inserted_id": inserted_id,
             "db": _MONGO_DB,
+            "filename": filename,
         })
     except (ConnectionFailure, OperationFailure) as exc:
         return jsonify({"ok": False, "error": f"MongoDB error: {exc}"}), 500
@@ -750,35 +862,39 @@ def save_to_db():
 
 @app.route("/api/save-local", methods=["POST"])
 def save_local():
-    """Save extracted JSON to a local folder based on category."""
+    """Save extracted JSON to a local folder based on category, named name_concisetopicin2-3words.json."""
     body = request.get_json(force=True) or {}
     parsed = body.get("parsed")
     category = body.get("category")
-    filename = body.get("filename", "document.json")
+    filename = body.get("filename", "")
 
     if not parsed or not isinstance(parsed, dict):
         return jsonify({"ok": False, "error": "Invalid parsed JSON data"}), 400
 
     if not category:
         category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
-    
+
     category_slug = re.sub(r"[^\w\-_]", "_", category).replace("__", "_").strip("_") or "other"
-    
-    name_base = os.path.splitext(os.path.basename(filename))[0]
-    clean_name = re.sub(r"[^\w\-_]", "_", name_base).strip("_") or "extracted"
-    
+
+    # Ensure standardized filename: name_concisetopicin2-3words.json
+    if not filename or filename in ("document.json", f"{category}.json", "extracted.json"):
+        save_filename = generate_suggested_filename(parsed)
+    else:
+        name_base = os.path.splitext(os.path.basename(filename))[0]
+        clean_name = re.sub(r"[^\w\-_]", "_", name_base).strip("_") or "extracted"
+        save_filename = f"{clean_name}.json"
+
     category_dir = os.path.join(os.path.dirname(__file__), "exports", category_slug)
     os.makedirs(category_dir, exist_ok=True)
-    
-    save_filename = f"{clean_name}.json"
+
     full_save_path = os.path.join(category_dir, save_filename)
-    
+
     try:
         with open(full_save_path, "w", encoding="utf-8") as f:
             json.dump(parsed, f, indent=2, ensure_ascii=False)
         saved_path = os.path.relpath(full_save_path, os.path.dirname(__file__)).replace("\\", "/")
         print(f"[Export] Saved locally: {saved_path}")
-        return jsonify({"ok": True, "saved_path": saved_path})
+        return jsonify({"ok": True, "saved_path": saved_path, "filename": save_filename})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

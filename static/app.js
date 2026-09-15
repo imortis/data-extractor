@@ -317,6 +317,14 @@ function renderResult(row, data) {
     tool.textContent = `🔧 ${Object.entries(counts).map(([n, c]) => `${n} ×${c}`).join(", ")}`;
     header.appendChild(tool);
   }
+  if (data.suggested_filename || data.original_filename) {
+    const fnBadge = document.createElement("span");
+    fnBadge.className = "filename-badge";
+    const displayName = data.suggested_filename || data.original_filename;
+    fnBadge.title = `Target export filename: ${displayName}`;
+    fnBadge.innerHTML = `📄 <span class="fn-text">${escapeHtml(displayName)}</span>`;
+    header.appendChild(fnBadge);
+  }
   card.appendChild(header);
 
   if (data.parsed) {
@@ -350,7 +358,7 @@ function renderResult(row, data) {
     saveLocalBtn.addEventListener("click", async () => {
       saveLocalBtn.disabled = true;
       saveLocalBtn.textContent = `Saving…`;
-      const filename = data.original_filename || ((data.category || "document") + ".json");
+      const filename = data.suggested_filename || data.original_filename || ((data.category || "document") + ".json");
       try {
         const res = await fetch("/api/save-local", {
           method: "POST",
@@ -404,7 +412,7 @@ function renderResult(row, data) {
     saveDbBtn.addEventListener("click", async () => {
       saveDbBtn.disabled = true;
       saveDbBtn.innerHTML = `<span class="db-spinner"></span> Saving…`;
-      const filename = data.original_filename || ((data.category || "document") + ".json");
+      const filename = data.suggested_filename || data.original_filename || ((data.category || "document") + ".json");
       try {
         const res = await fetch("/api/save-to-db", {
           method: "POST",
@@ -418,6 +426,7 @@ function renderResult(row, data) {
         const result = await res.json();
         if (result.ok) {
           saveDbBtn.innerHTML = `✅ Saved to <strong>${result.collection}</strong>`;
+          saveDbBtn.title = `Saved as ${result.filename || filename}`;
           saveDbBtn.classList.add("save-db-btn--success");
         } else {
           saveDbBtn.innerHTML = `❌ Error`;
