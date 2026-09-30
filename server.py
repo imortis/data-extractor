@@ -95,28 +95,29 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
    - DO NOT classify as generic "other_document" if it matches specific categories.
 
 2. Extract key summary information:
-   - primary_name: Main person, institution, company, candidate, or issuing authority (e.g. 'M.S. Ramaiah Institute of Technology', 'Sahitya Chadda', 'NatWest').
-   - concise_topic: Strictly 2 to 3 words describing the core subject or role (e.g. 'Admissions Intake Statement', 'Software Engineer Resume', 'Coding Event Participation').
+   - primary_name: Main person, institution, company, vendor, or issuing authority (e.g. 'Acme Corp', 'Reserve Bank', 'John Doe', 'Tech University').
+   - concise_topic: Strictly 2 to 3 words describing the core subject or role (e.g. 'Financial Balance Sheet', 'Quarterly Sales Report', 'Software Engineer Resume', 'Itemized Product Invoice').
    - summary: One sentence summarizing the document.
-   - key_info: At most 8 of the most important high-level scalar fields (e.g. academic_year, total_intake, total_admissions).
+   - key_info: At most 8 of the most important high-level scalar fields (e.g. document_date, total_amount, report_period, total_count).
 
 3. Extract ALL Tables and Tabular Data into "tables":
-   If the image or document contains ANY table, schedule, statement, or grid:
-   - Extract EVERY table into the "tables" array.
+   If the image or document contains ANY table, schedule, statement, ledger, balance sheet, price list, inventory, or spreadsheet grid:
+   - Extract EVERY table dynamically into the "tables" array.
+   - Works for ANY table domain (e.g. invoices, academic schedules, admissions, payroll, balance sheets, scientific results, sports stats, rosters).
    - Schema per table:
      {
-       "title": "<Document / Table Title, e.g. 'Sanctioned Intake and Admissions 2021-2022'>",
+       "title": "<Document / Table Title, e.g. 'Quarterly Financial Statement' or 'Product Inventory' or 'Sanctioned Intake'>",
        "headers": ["<Col 1>", "<Col 2>", "<Col 3>", ...],
        "rows": [
          ["<Row 1 Col 1>", "<Row 1 Col 2>", ...],
          ["<Row 2 Col 1>", "<Row 2 Col 2>", ...]
        ]
      }
-   - CRITICAL RULES FOR HIGH-ACCURACY TABLE EXTRACTION:
-     a. Flatten Grouped / Multi-Tier Headers: When a table has super-headers grouping multiple sub-columns (e.g. category 'CET' with sub-columns 'Intake', 'Adms.', 'Vac.', or 'Management' with 'Intake', 'Admn.', 'Vac.', 'Unfilled KEA', 'Unfilled COMEDK'), flatten them into composite, fully-qualified header names: e.g. 'CET - Intake', 'CET - Adms.', 'CET - Vac.', 'Comedk - Intake', 'Management - Intake', 'Management - Unfilled KEA', 'Admission - J&K', etc. This ensures every Excel column has an accurate, unambiguous header.
+   - CRITICAL UNIVERSAL RULES FOR HIGH-ACCURACY TABLE EXTRACTION:
+     a. Flatten Grouped / Multi-Tier Headers: When ANY table has super-headers grouping multiple sub-columns (e.g. 'Q1' with sub-columns 'Actual', 'Budget', or 'Category A' with 'Intake', 'Admissions', or 'Taxes' with 'CGST', 'SGST'), flatten them into composite, fully-qualified header names: e.g. 'Q1 - Actual', 'Q1 - Budget', 'Taxes - CGST', 'Taxes - SGST'. This ensures every Excel column has an accurate, unambiguous header regardless of how complex the table header hierarchy is.
      b. Strict Column-Count Invariant: Every row in `rows` MUST have the EXACT same number of elements as the `headers` list. Never skip or collapse columns. If a cell is blank or has no data, output "" or "0" (if it is a numeric count/amount column). Never let columns shift horizontally.
-     c. Complete Row Coverage: Extract every row from top to bottom. Do not skip rows. Include all serial numbers, department/course rows, category rows, subtotal rows, and grand total rows.
-     d. Exact Data Preservation: Maintain exact numbers, codes, abbreviations, and text verbatim. Do not truncate or approximate values.
+     c. Complete Row Coverage: Extract every row from top to bottom. Do not skip rows. Include all serial numbers, line items, item descriptions, subtotal rows, and grand total rows.
+     d. Exact Data Preservation: Maintain exact numbers, codes, currency values, percentages, abbreviations, and text verbatim. Do not truncate, round, or approximate values.
      e. If no tables exist in the content, set "tables": [].
 
 4. If a document's content appears truncated ("...[truncated, N more characters]"), you may call the read_file tool with the file's id to fetch more of it before answering. If a PDF note says specific additional pages are NOT yet attached, you may call get_pdf_page_image(file_id, page_number) to see one of those specific pages. Never call a tool to re-fetch content already given to you in this same message.
