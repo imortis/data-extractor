@@ -276,6 +276,59 @@ function syntaxHighlight(json) {
   );
 }
 
+function renderTablePreview(tbl, idx) {
+  const wrap = document.createElement("div");
+  wrap.className = "table-preview-card";
+
+  const titleBar = document.createElement("div");
+  titleBar.className = "table-title-bar";
+  const colCount = (tbl.headers || []).length;
+  const rowCount = (tbl.rows || []).length;
+  titleBar.innerHTML = `<span class="tbl-name">📊 ${escapeHtml(tbl.title || ("Table " + (idx + 1)))}</span><span class="tbl-dims">${colCount} cols · ${rowCount} rows</span>`;
+  wrap.appendChild(titleBar);
+
+  const scrollBox = document.createElement("div");
+  scrollBox.className = "table-scroll-box";
+
+  const table = document.createElement("table");
+  table.className = "extracted-table";
+
+  if (Array.isArray(tbl.headers) && tbl.headers.length) {
+    const thead = document.createElement("thead");
+    const tr = document.createElement("tr");
+    tbl.headers.forEach((h) => {
+      const th = document.createElement("th");
+      th.textContent = h;
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+    table.appendChild(thead);
+  }
+
+  if (Array.isArray(tbl.rows) && tbl.rows.length) {
+    const tbody = document.createElement("tbody");
+    tbl.rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const isTotal = (r || []).slice(0, 3).some((c) => /total|subtotal/i.test(String(c)));
+      if (isTotal) tr.className = "total-row";
+      (r || []).forEach((c, cIdx) => {
+        const td = document.createElement("td");
+        td.textContent = c !== null && c !== undefined ? String(c) : "";
+        if (/^-?\d+(\.\d+)?$/.test(String(c).trim())) {
+          td.className = "cell-num";
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+  }
+
+  scrollBox.appendChild(table);
+  wrap.appendChild(scrollBox);
+  return wrap;
+}
+
 function renderResult(row, data) {
   const bubble = row.querySelector(".bubble");
   bubble.innerHTML = "";
@@ -335,6 +388,13 @@ function renderResult(row, data) {
       card.appendChild(summary);
     }
 
+    // Render interactive table preview if tables exist
+    if (Array.isArray(data.parsed.tables) && data.parsed.tables.length > 0) {
+      data.parsed.tables.forEach((tbl, idx) => {
+        card.appendChild(renderTablePreview(tbl, idx));
+      });
+    }
+
     const toolbar = document.createElement("div");
     toolbar.className = "json-toolbar";
 
@@ -350,6 +410,48 @@ function renderResult(row, data) {
       setTimeout(() => (copyBtn.textContent = "Copy JSON"), 1200);
     });
     btnGroup.appendChild(copyBtn);
+
+    // --- Export to Excel (.xlsx) button ---
+    const exportExcelBtn = document.createElement("button");
+    exportExcelBtn.className = "copy-btn export-excel-btn";
+    exportExcelBtn.innerHTML = `📊 Export to Excel`;
+    exportExcelBtn.title = "Download clean, formatted .xlsx spreadsheet";
+    exportExcelBtn.addEventListener("click", async () => {
+      exportExcelBtn.disabled = true;
+      exportExcelBtn.textContent = `Generating Excel…`;
+      const filename = data.suggested_filename || data.original_filename || "extracted_data.xlsx";
+      try {
+        const res = await fetch("/api/export-excel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            parsed: data.parsed,
+            filename: filename,
+          }),
+        });
+        if (!res.ok) throw new Error("Excel export failed");
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const excelName = filename.replace(/\.json$/i, "") + ".xlsx";
+        a.download = excelName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        exportExcelBtn.innerHTML = `✓ Downloaded`;
+        setTimeout(() => {
+          exportExcelBtn.innerHTML = `📊 Export to Excel`;
+          exportExcelBtn.disabled = false;
+        }, 2200);
+      } catch (err) {
+        exportExcelBtn.textContent = `❌ Error`;
+        exportExcelBtn.disabled = false;
+        alert("Excel export failed: " + err.message);
+      }
+    });
+    btnGroup.appendChild(exportExcelBtn);
 
     // --- Save to Local button ---
     const saveLocalBtn = document.createElement("button");
@@ -378,7 +480,10 @@ function renderResult(row, data) {
             const openFolderBtn = document.createElement("button");
             openFolderBtn.className = "saved-tag saved-tag-btn";
             openFolderBtn.title = `Click to open this folder in Windows Explorer`;
-            openFolderBtn.innerHTML = `📁 Saved to <code class="path-code">${escapeHtml(result.saved_path)}</code> <span class="open-arrow">↗</span>`;
+            const infoText = result.excel_saved_path 
+              ? `📁 Saved JSON &amp; Excel to <code class="path-code">${escapeHtml(result.saved_path)}</code>`
+              : `📁 Saved to <code class="path-code">${escapeHtml(result.saved_path)}</code>`;
+            openFolderBtn.innerHTML = `${infoText} <span class="open-arrow">↗</span>`;
             openFolderBtn.addEventListener("click", async () => {
               try {
                 await fetch("/api/open-folder", {

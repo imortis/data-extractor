@@ -31,7 +31,7 @@ import uuid
 import zipfile
 
 import requests
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, send_file
 
 # --- MongoDB Atlas setup ---
 try:
@@ -91,27 +91,55 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
    - "id_card": Government IDs (Passport, Driver License, Aadhaar, PAN, Voter ID), student/employee ID badges.
    - "receipt_or_invoice": Bills, payment receipts, tax invoices, purchase orders, order confirmations.
    - "contract": NDAs, service agreements, lease/rental agreements, terms of service.
-   - DO NOT classify as generic "other_document" if it matches specific categories like certificate, circular, offer_letter, resume, id_card, or invoice.
+   - "table" or "spreadsheet": Statements, admission lists, financial reports, schedules, matrices, marksheets, rosters, or spreadsheets containing tabular rows and columns.
+   - DO NOT classify as generic "other_document" if it matches specific categories.
 
-2. Extract ONLY the key, important information a human would actually want at a glance — not a transcription of the whole thing. Shape "key_info" to fit the content, e.g.:
-   - certificate → recipient_name, issuing_organization, certificate_title/course_name, issue_date, credential_id/grade/distinction
-   - circular → circular_number/id, issuing_authority/department, title/subject, issue_date, effective_date, target_audience, key_directive/action_required
-   - offer_letter → candidate_name, company_name, job_title/designation, joining_date, compensation/salary, work_location
-   - resume → name, role/title, top_skills, experience_years, latest_organization/education
-   - receipt/invoice → vendor, invoice_number, date, total_amount, tax, payment_status
-   - id_card → name, id_type, id_number, dob, expiry_date, address
+2. Extract key summary information:
+   - primary_name: Main person, institution, company, candidate, or issuing authority (e.g. 'M.S. Ramaiah Institute of Technology', 'Sahitya Chadda', 'NatWest').
+   - concise_topic: Strictly 2 to 3 words describing the core subject or role (e.g. 'Admissions Intake Statement', 'Software Engineer Resume', 'Coding Event Participation').
+   - summary: One sentence summarizing the document.
+   - key_info: At most 8 of the most important high-level scalar fields (e.g. academic_year, total_intake, total_admissions).
 
-3. If a document's content appears truncated ("...[truncated, N more characters]"), you may call the read_file tool with the file's id to fetch more of it before answering. If a PDF note says specific additional pages are NOT yet attached, you may call get_pdf_page_image(file_id, page_number) to see one of those specific pages. Never call a tool to re-fetch content already given to you in this same message.
+3. Extract ALL Tables and Tabular Data into "tables":
+   If the image or document contains ANY table, schedule, statement, or grid:
+   - Extract EVERY table into the "tables" array.
+   - Schema per table:
+     {
+       "title": "<Document / Table Title, e.g. 'Sanctioned Intake and Admissions 2021-2022'>",
+       "headers": ["<Col 1>", "<Col 2>", "<Col 3>", ...],
+       "rows": [
+         ["<Row 1 Col 1>", "<Row 1 Col 2>", ...],
+         ["<Row 2 Col 1>", "<Row 2 Col 2>", ...]
+       ]
+     }
+   - CRITICAL RULES FOR HIGH-ACCURACY TABLE EXTRACTION:
+     a. Flatten Grouped / Multi-Tier Headers: When a table has super-headers grouping multiple sub-columns (e.g. category 'CET' with sub-columns 'Intake', 'Adms.', 'Vac.', or 'Management' with 'Intake', 'Admn.', 'Vac.', 'Unfilled KEA', 'Unfilled COMEDK'), flatten them into composite, fully-qualified header names: e.g. 'CET - Intake', 'CET - Adms.', 'CET - Vac.', 'Comedk - Intake', 'Management - Intake', 'Management - Unfilled KEA', 'Admission - J&K', etc. This ensures every Excel column has an accurate, unambiguous header.
+     b. Strict Column-Count Invariant: Every row in `rows` MUST have the EXACT same number of elements as the `headers` list. Never skip or collapse columns. If a cell is blank or has no data, output "" or "0" (if it is a numeric count/amount column). Never let columns shift horizontally.
+     c. Complete Row Coverage: Extract every row from top to bottom. Do not skip rows. Include all serial numbers, department/course rows, category rows, subtotal rows, and grand total rows.
+     d. Exact Data Preservation: Maintain exact numbers, codes, abbreviations, and text verbatim. Do not truncate or approximate values.
+     e. If no tables exist in the content, set "tables": [].
 
-4. Reply with ONLY a single valid JSON object — no markdown fences, no commentary, no <think> tags, nothing before or after the JSON. Use exactly this shape:
+4. If a document's content appears truncated ("...[truncated, N more characters]"), you may call the read_file tool with the file's id to fetch more of it before answering. If a PDF note says specific additional pages are NOT yet attached, you may call get_pdf_page_image(file_id, page_number) to see one of those specific pages. Never call a tool to re-fetch content already given to you in this same message.
+
+5. Reply with ONLY a single valid JSON object — no markdown fences, no commentary, no <think> tags, nothing before or after the JSON. Use exactly this shape:
 
 {
   "image_type": "<one precise category from the list above>",
   "confidence": <float 0-1>,
   "summary": "<one sentence describing the content>",
   "primary_name": "<primary person, student, candidate, recipient, company, or issuing authority name>",
-  "concise_topic": "<strictly 2 to 3 words describing the specific topic or document type, e.g. 'Software Engineer Resume', 'Coding Event Participation', 'Cloud Services Invoice'>",
-  "key_info": { <at most 8 of the most important fields, snake_case keys, short values> }
+  "concise_topic": "<strictly 2 to 3 words describing the specific topic or document type>",
+  "key_info": { <at most 8 of the most important fields, snake_case keys, short values> },
+  "tables": [
+    {
+      "title": "<table title>",
+      "headers": ["<header1>", "<header2>", ...],
+      "rows": [
+        ["<val1>", "<val2>", ...],
+        ...
+      ]
+    }
+  ]
 }
 
 Rules:
@@ -860,9 +888,170 @@ def save_to_db():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+def generate_excel_bytes(parsed: dict, filename: str = "") -> bytes:
+    """Build an in-memory .xlsx workbook with professional formatting from parsed table data."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    tables = parsed.get("tables") if isinstance(parsed, dict) else None
+
+    # Fallback if no tables extracted
+    if not tables or not isinstance(tables, list):
+        headers = ["Field", "Extracted Value"]
+        key_info = parsed.get("key_info", {}) if isinstance(parsed, dict) else {}
+        rows = [[k.replace("_", " ").title(), str(v)] for k, v in key_info.items()]
+        if not rows:
+            rows = [["Summary", str(parsed.get("summary", ""))] if isinstance(parsed, dict) else ["Data", str(parsed)]]
+        tables = [{"title": parsed.get("summary", "Extracted Data") if isinstance(parsed, dict) else "Data", "headers": headers, "rows": rows}]
+
+    thin_border = Border(
+        left=Side(style='thin', color='CBD5E1'),
+        right=Side(style='thin', color='CBD5E1'),
+        top=Side(style='thin', color='CBD5E1'),
+        bottom=Side(style='thin', color='CBD5E1')
+    )
+    double_bottom_border = Border(
+        left=Side(style='thin', color='CBD5E1'),
+        right=Side(style='thin', color='CBD5E1'),
+        top=Side(style='thin', color='94A3B8'),
+        bottom=Side(style='double', color='1E293B')
+    )
+
+    header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+
+    total_font = Font(name="Calibri", size=10, bold=True, color="0F172A")
+    total_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+
+    even_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+    odd_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+
+    for t_idx, tbl in enumerate(tables):
+        if not isinstance(tbl, dict):
+            continue
+        title = tbl.get("title") or f"Table {t_idx + 1}"
+        safe_title = re.sub(r"[\\/*?:\[\]]", "_", title)[:30].strip() or f"Sheet{t_idx+1}"
+        ws = wb.create_sheet(title=safe_title)
+        ws.views.sheetView[0].showGridLines = True
+
+        headers = tbl.get("headers") or []
+        rows = tbl.get("rows") or []
+
+        curr_row = 1
+
+        # Title Row Banner
+        if title:
+            max_cols = max(len(headers), 1)
+            ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=max_cols)
+            title_cell = ws.cell(row=curr_row, column=1, value=title)
+            title_cell.font = Font(name="Calibri", size=11, bold=True, color="0F172A")
+            title_cell.alignment = Alignment(horizontal="left", vertical="center")
+            ws.row_dimensions[curr_row].height = 24
+            curr_row += 1
+
+        # Header Row
+        header_row_num = curr_row
+        ws.row_dimensions[header_row_num].height = 32
+        for col_idx, h in enumerate(headers, 1):
+            cell = ws.cell(row=header_row_num, column=col_idx, value=str(h))
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+        curr_row += 1
+
+        # Data Rows
+        for r_idx, row in enumerate(rows):
+            is_total_row = False
+            for check_val in row[:3]:
+                if any(k in str(check_val).lower() for k in ("total", "subtotal", "sub total")):
+                    is_total_row = True
+                    break
+
+            ws.row_dimensions[curr_row].height = 20
+            row_fill = total_fill if is_total_row else (even_fill if r_idx % 2 == 0 else odd_fill)
+            row_font = total_font if is_total_row else Font(name="Calibri", size=10, color="1E293B")
+            row_border = double_bottom_border if is_total_row else thin_border
+
+            for col_idx in range(1, len(headers) + 1):
+                raw_val = row[col_idx - 1] if col_idx - 1 < len(row) else ""
+                val = raw_val
+
+                # Attempt numeric conversion
+                val_str = str(raw_val).strip() if raw_val is not None else ""
+                val_clean = val_str.replace(",", "")
+                is_num = False
+                align_horiz = "left"
+
+                if val_clean.lstrip("-").isdigit():
+                    val = int(val_clean)
+                    is_num = True
+                    align_horiz = "right"
+                elif re.match(r"^-?\d+\.\d+$", val_clean):
+                    try:
+                        val = float(val_clean)
+                        is_num = True
+                        align_horiz = "right"
+                    except ValueError:
+                        pass
+
+                if col_idx == 1 and (is_num or len(val_str) <= 4):
+                    align_horiz = "center"
+
+                cell = ws.cell(row=curr_row, column=col_idx, value=val)
+                cell.font = row_font
+                cell.fill = row_fill
+                cell.alignment = Alignment(horizontal=align_horiz, vertical="center")
+                cell.border = row_border
+
+            curr_row += 1
+
+        # Auto-adjust column widths
+        for col_idx in range(1, len(headers) + 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = 0
+            for r in range(header_row_num, curr_row):
+                c_val = ws.cell(row=r, column=col_idx).value
+                if c_val is not None:
+                    max_len = max(max_len, len(str(c_val)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 11), 60)
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+@app.route("/api/export-excel", methods=["POST"])
+def export_excel():
+    """Convert extracted table data into a clean, styled .xlsx spreadsheet for download."""
+    data = request.get_json(force=True) or {}
+    parsed = data.get("parsed") or {}
+    filename = data.get("filename") or "extracted_data.xlsx"
+
+    try:
+        excel_bytes = generate_excel_bytes(parsed, filename)
+        base_name = os.path.splitext(os.path.basename(filename))[0]
+        clean_name = re.sub(r"[^\w\-_]", "_", base_name).strip("_") or "extracted_table"
+        download_name = f"{clean_name}.xlsx"
+
+        return send_file(
+            io.BytesIO(excel_bytes),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=download_name,
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/save-local", methods=["POST"])
 def save_local():
-    """Save extracted JSON to a local folder based on category, named name_concisetopicin2-3words.json."""
+    """Save extracted JSON and Excel to a local folder based on category, named name_concisetopicin2-3words.json/.xlsx."""
     body = request.get_json(force=True) or {}
     parsed = body.get("parsed")
     category = body.get("category")
@@ -894,7 +1083,28 @@ def save_local():
             json.dump(parsed, f, indent=2, ensure_ascii=False)
         saved_path = os.path.relpath(full_save_path, os.path.dirname(__file__)).replace("\\", "/")
         print(f"[Export] Saved locally: {saved_path}")
-        return jsonify({"ok": True, "saved_path": saved_path, "filename": save_filename})
+
+        # Also generate and save Excel file if tables are present
+        excel_saved_path = None
+        if parsed.get("tables"):
+            try:
+                base_clean = os.path.splitext(save_filename)[0]
+                excel_filename = f"{base_clean}.xlsx"
+                excel_full_path = os.path.join(category_dir, excel_filename)
+                excel_bytes = generate_excel_bytes(parsed, excel_filename)
+                with open(excel_full_path, "wb") as f_excel:
+                    f_excel.write(excel_bytes)
+                excel_saved_path = os.path.relpath(excel_full_path, os.path.dirname(__file__)).replace("\\", "/")
+                print(f"[Export] Saved Excel locally: {excel_saved_path}")
+            except Exception as e_err:
+                print(f"[Export] Could not write local Excel: {e_err}")
+
+        return jsonify({
+            "ok": True,
+            "saved_path": saved_path,
+            "filename": save_filename,
+            "excel_saved_path": excel_saved_path
+        })
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

@@ -415,6 +415,103 @@ html, body {
   background: rgba(124, 158, 255, 0.25);
   color: white;
 }
+.export-excel-btn {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  font-weight: 600;
+}
+.export-excel-btn:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: rgba(16, 185, 129, 0.55);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+/* Table preview container */
+.table-preview-card {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+.table-title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.table-title-bar .tbl-name {
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.table-title-bar .tbl-dims {
+  font-size: 11px;
+  color: var(--text-dimmer);
+  font-family: "JetBrains Mono", monospace;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.table-scroll-box {
+  max-height: 420px;
+  overflow: auto;
+}
+.table-scroll-box::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.table-scroll-box::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+}
+.extracted-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.extracted-table th {
+  position: sticky;
+  top: 0;
+  background: #1e293b;
+  color: #f8fafc;
+  padding: 8px 12px;
+  text-align: center;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 2;
+  letter-spacing: 0.01em;
+}
+.extracted-table td {
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+.extracted-table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.extracted-table tr:hover td {
+  background: rgba(124, 158, 255, 0.1);
+}
+.extracted-table tr.total-row td {
+  background: rgba(245, 158, 11, 0.14) !important;
+  color: #fbbf24;
+  font-weight: 700;
+  border-top: 1px solid rgba(245, 158, 11, 0.35);
+  border-bottom: 2px solid rgba(245, 158, 11, 0.55);
+}
+.extracted-table td.cell-num {
+  text-align: right;
+}
+
 .save-db-btn {
   color: #4fd699;
   background: rgba(79, 214, 153, 0.1);
