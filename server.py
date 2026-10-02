@@ -63,7 +63,7 @@ app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024  # 30MB per upload
 
 DEFAULT_HOST = "https://awkward-scion-passover.ngrok-free.dev"
 DEFAULT_MODEL = "qwen3.8:27b"
-REQUEST_TIMEOUT = 300
+REQUEST_TIMEOUT = 600
 INLINE_CHAR_LIMIT = 12000  # per-file chars inlined directly into the prompt
 TOOL_CHUNK_CHARS = 8000  # per-call chunk size the read_file tool returns
 MAX_TOOL_ITERATIONS = 6  # a bit higher now: get_pdf_page_image calls eat iterations too
@@ -348,6 +348,32 @@ def get_ext(filename: str) -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
+def optimize_image_bytes(data: bytes, max_dim: int = 1800) -> tuple[str, str]:
+    """Optimize image to safe max dimension for vision models, returning (base64_str, ext)."""
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(data))
+        w, h = im.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            new_size = (int(w * scale), int(h * scale))
+            im = im.resize(new_size, Image.Resampling.LANCZOS)
+
+        out_format = "PNG" if im.mode in ("RGBA", "P") else "JPEG"
+        out_io = io.BytesIO()
+        if out_format == "JPEG":
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+            im.save(out_io, format="JPEG", quality=90, optimize=True)
+        else:
+            im.save(out_io, format="PNG", optimize=True)
+
+        opt_data = out_io.getvalue()
+        return base64.b64encode(opt_data).decode("ascii"), out_format.lower()
+    except Exception:
+        return base64.b64encode(data).decode("ascii"), "png"
+
+
 @app.route("/")
 def index():
     return send_from_directory("templates", "index.html")
@@ -365,11 +391,11 @@ def upload():
     file_id = uuid.uuid4().hex[:12]
 
     if ext in IMAGE_EXTS:
-        b64 = base64.b64encode(data).decode("ascii")
+        b64, out_ext = optimize_image_bytes(data)
         FILES[file_id] = {
             "kind": "image",
             "filename": filename,
-            "ext": ext,
+            "ext": out_ext,
             "base64": b64,
             "size": len(data),
         }
@@ -380,7 +406,7 @@ def upload():
                 "filename": filename,
                 "kind": "image",
                 "size": len(data),
-                "data_url": f"data:image/{ext};base64,{b64}",
+                "data_url": f"data:image/{out_ext};base64,{b64}",
             }
         )
 
