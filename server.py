@@ -3,23 +3,25 @@ Backend for the image / document data-extraction chat UI.
 
 - Accepts images (vision, via /api/chat "images") and documents (PDF, DOCX,
   XLSX, PPTX, CSV, TXT, MD, JSON) which are text-extracted server-side.
-- Extracted content is inlined into the prompt AND made available to the
-  model as a real tool ("read_file") it can call for the full/partial text
-  of any attachment (useful when content was truncated for size).
 - PDFs are ALSO rendered to page images (via PyMuPDF) and sent to the vision
   model alongside any extracted text — this is what makes scanned PDFs (no
   text layer at all) work, the same way ChatGPT/Gemini handle them: by
   actually looking at the page, not just reading a text layer that may not
-  exist. A second tool ("get_pdf_page_image") lets the model request any
-  additional page beyond the ones auto-attached.
+  exist.
+- Large attachments are split into parts, sent to the model one part at a
+  time, and merged into a single result. Anything that could not be processed
+  is reported in "warnings" instead of being dropped silently.
 - DOCX/XLSX/PPTX are OOXML zip packages, so any embedded pictures (photos,
   screenshots, scanned inserts, slide backgrounds) are pulled straight out
   of the zip's media folder and sent to the vision model too, not just the
   text layer.
-- Times the full round trip (including any tool-call loop) and returns it.
+- Every extracted value is checked against evidence the model didn't produce
+  (see verification.py), and the result is returned under "verification".
+- Times the full round trip (across all parts) and returns it.
 """
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import datetime
 import io
@@ -32,6 +34,17 @@ import zipfile
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory, send_file
+
+import digit_repair
+import file_tables
+import records
+import repair
+from verification import (
+    UNCHECKED,
+    VERIFIED,
+    SourceEvidence,
+    verify_record,
+)
 
 # --- MongoDB Atlas setup ---
 try:
@@ -64,10 +77,22 @@ app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024  # 30MB per upload
 DEFAULT_HOST = "https://awkward-scion-passover.ngrok-free.dev"
 DEFAULT_MODEL = "qwen3.8:27b"
 REQUEST_TIMEOUT = 600
-INLINE_CHAR_LIMIT = 12000  # per-file chars inlined directly into the prompt
-TOOL_CHUNK_CHARS = 8000  # per-call chunk size the read_file tool returns
-MAX_TOOL_ITERATIONS = 6  # a bit higher now: get_pdf_page_image calls eat iterations too
-MAX_AUTO_RENDER_PDF_PAGES = 6  # pages auto-rendered to images on upload, no tool call needed
+INLINE_CHAR_LIMIT = 12000  # max document chars sent to the model in one part
+MAX_IMAGES_PER_PART = 6  # max images sent to the model in one part (GPU memory)
+MAX_PARTS_PER_REQUEST = 12  # anything beyond this is reported as not processed
+MAX_EXCEL_DIGITS = 15  # Excel silently corrupts numbers with more significant digits
+MAX_OCR_IMAGES = 12  # OCR takes tens of seconds per image on CPU
+# The model's default temperature is 1: identical requests gave different misreads.
+MODEL_OPTIONS = {"temperature": 0, "seed": 42}
+MODEL_ALTERNATIVES = 5  # alternatives per token, for repairing misread digits
+MODEL_KEEP_ALIVE = "30m"  # reloading the model costs about 9 seconds
+# An image costs about one token per 32x32 pixels, so small scans leave under a token per digit.
+# Doubling the size cut misread cells from 7 to 1 of 720 on the sample scans.
+MODEL_IMAGE_SCALE = 2
+MODEL_IMAGE_MAX_DIM = 3200
+MODEL_IMAGE_MAX_PIXELS = 6_000_000
+MAX_IMAGES_TO_ENLARGE = 2  # several enlarged images in one request risk running out of GPU memory
+MIN_TEXT_LAYER_CHARS = 20  # fewer than this on a PDF page means it's effectively a scan
 PDF_RENDER_DPI = 150
 MAX_EMBEDDED_IMAGES = 6  # per docx/xlsx/pptx file
 
@@ -98,11 +123,14 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
    - primary_name: Main person, institution, company, vendor, or issuing authority (e.g. 'Acme Corp', 'Reserve Bank', 'John Doe', 'Tech University').
    - concise_topic: Strictly 2 to 3 words describing the core subject or role (e.g. 'Financial Balance Sheet', 'Quarterly Sales Report', 'Software Engineer Resume', 'Itemized Product Invoice').
    - summary: One sentence summarizing the document.
-   - key_info: At most 8 of the most important high-level scalar fields (e.g. document_date, total_amount, report_period, total_count).
+   - record_owner: "student" if the content is about students (ID cards, grade reports, admissions), "faculty" if it is about teaching staff or employees (publications, appointments), otherwise "other".
+   - key_info: Every important high-level scalar field that is printed in the content (e.g. document_date, total_amount, report_period, usn). Copy values as printed.
+   - sections: Any repeating non-table content, as one section per kind of entry. For example a resume's work experience, education and projects; a certificate's list of courses; a letter's list of conditions. Every entry is an object of short snake_case fields, for example {"title": "Experience", "items": [{"role": "...", "organization": "...", "start_date": "...", "end_date": "..."}]}. Use [] if there is nothing like this. Do not repeat table content here.
 
 3. Extract ALL Tables and Tabular Data into "tables":
    If the image or document contains ANY table, schedule, statement, ledger, balance sheet, price list, inventory, or spreadsheet grid:
    - Extract EVERY table dynamically into the "tables" array.
+   - Keep EVERY column shown in the table, exactly as it appears, even if all of its cells are blank. Never drop a column because it is empty.
    - Works for ANY table domain (e.g. invoices, academic schedules, admissions, payroll, balance sheets, scientific results, sports stats, rosters).
    - Schema per table:
      {
@@ -115,12 +143,12 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
      }
    - CRITICAL UNIVERSAL RULES FOR HIGH-ACCURACY TABLE EXTRACTION:
      a. Flatten Grouped / Multi-Tier Headers: When ANY table has super-headers grouping multiple sub-columns (e.g. 'Q1' with sub-columns 'Actual', 'Budget', or 'Category A' with 'Intake', 'Admissions', or 'Taxes' with 'CGST', 'SGST'), flatten them into composite, fully-qualified header names: e.g. 'Q1 - Actual', 'Q1 - Budget', 'Taxes - CGST', 'Taxes - SGST'. This ensures every Excel column has an accurate, unambiguous header regardless of how complex the table header hierarchy is.
-     b. Strict Column-Count Invariant: Every row in `rows` MUST have the EXACT same number of elements as the `headers` list. Never skip or collapse columns. If a cell is blank or has no data, output "" or "0" (if it is a numeric count/amount column). Never let columns shift horizontally.
-     c. Complete Row Coverage: Extract every row from top to bottom. Do not skip rows. Include all serial numbers, line items, item descriptions, subtotal rows, and grand total rows.
-     d. Exact Data Preservation: Maintain exact numbers, codes, currency values, percentages, abbreviations, and text verbatim. Do not truncate, round, or approximate values.
+     b. Strict Column-Count Invariant: Every row in `rows` MUST have the EXACT same number of elements as the `headers` list. Never skip or collapse columns. If a cell is truly blank or unreadable, output "". If a cell has a printed value, output that value, including a printed "0". Never write a value that is not printed. Never let columns shift horizontally.
+     c. Complete Row Coverage: Extract every row from top to bottom. Do not skip rows. Include all serial numbers, line items, item descriptions, subtotal rows, and grand total rows, including subtotal rows that have no label.
+     d. Exact Data Preservation: Maintain exact numbers, codes, currency values, percentages, abbreviations, and text verbatim. Do not truncate, round, or approximate values. Do not expand abbreviations, change capitalization, or correct spelling: a printed 'ENGG.' or 'SIENCE' stays exactly as printed.
      e. If no tables exist in the content, set "tables": [].
 
-4. If a document's content appears truncated ("...[truncated, N more characters]"), you may call the read_file tool with the file's id to fetch more of it before answering. If a PDF note says specific additional pages are NOT yet attached, you may call get_pdf_page_image(file_id, page_number) to see one of those specific pages. Never call a tool to re-fetch content already given to you in this same message.
+4. Large attachments may arrive in several parts, one part per message. If told you are seeing one part, extract only what is in that part and do not guess at the rest. If told how the previous part's last table ended and this part continues that table, reuse its exact title and headers, and do not repeat its header row as data.
 
 5. Reply with ONLY a single valid JSON object — no markdown fences, no commentary, no <think> tags, nothing before or after the JSON. Use exactly this shape:
 
@@ -130,7 +158,9 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
   "summary": "<one sentence describing the content>",
   "primary_name": "<primary person, student, candidate, recipient, company, or issuing authority name>",
   "concise_topic": "<strictly 2 to 3 words describing the specific topic or document type>",
-  "key_info": { <at most 8 of the most important fields, snake_case keys, short values> },
+  "record_owner": "<student | faculty | other>",
+  "key_info": { <the important fields, snake_case keys, short values> },
+  "sections": [ { "title": "<section name>", "items": [ { <short snake_case fields> } ] } ],
   "tables": [
     {
       "title": "<table title>",
@@ -144,56 +174,13 @@ SYSTEM_PROMPT = """You are an expert data-extraction assistant. Each turn you ma
 }
 
 Rules:
-- Be concise. Skip boilerplate: letterhead/address blocks, repeated institution names, cc/distribution lists, page footers, blank/unfilled fields, routine sign-offs — include them only if that boilerplate IS the actual point of the request.
+- Be concise in "summary" and "key_info". There, skip boilerplate: letterhead/address blocks, repeated institution names, cc/distribution lists, page footers, blank/unfilled fields, routine sign-offs — include them only if that boilerplate IS the actual point of the request. This does NOT apply to "tables": always extract tables in full, including blank cells and blank columns.
 - Never invent data that isn't visible in the image or present in the document text.
-- If a field is unreadable or absent, omit it or set it to null — never guess.
-- primary_name should be the main person or organization's name (e.g. 'Sahitya Chadda', 'Google', 'NatWest').
+- If a "key_info" field is unreadable or absent, omit it or set it to null — never guess. In "tables", use "" for those cells so the columns stay aligned.
+- primary_name should be the main person or organization's name (e.g. 'Sahitya Chadda', 'Google', 'NatWest'), copied as printed. If no such name is printed, set it to null. Never infer it from a course list, a code, or general knowledge.
 - concise_topic MUST be strictly 2 to 3 words describing the core subject, role, or event (e.g. 'Software Engineer Resume', 'Coding Event Participation', 'Cloud Services Invoice', 'Academic Examination Circular').
-- key_info must have at most 8 fields. Prioritize the most important ones; drop the rest rather than padding.
-- Values should be short (a word, number, date, or short phrase) — not full paragraphs or verbatim quotes.
+- "key_info" values should be short (a word, number, date, or short phrase) — not full paragraphs or verbatim quotes. Table cells stay verbatim.
 - Output must be strictly valid JSON, parseable by a strict parser. /no_think"""
-
-READ_FILE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "read_file",
-        "description": (
-            "Fetch text content of a previously attached document by its file_id. "
-            "Use this when a file's inlined content was marked truncated and you need "
-            "more of it. Supports pagination via offset/length."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {"type": "string", "description": "The attachment's file_id."},
-                "offset": {"type": "integer", "description": "Character offset to start from. Default 0."},
-                "length": {"type": "integer", "description": f"Max characters to return. Default {TOOL_CHUNK_CHARS}."},
-            },
-            "required": ["file_id"],
-        },
-    },
-}
-
-GET_PDF_PAGE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_pdf_page_image",
-        "description": (
-            "Render a specific page of an attached PDF as an image so you can visually read it "
-            "(useful for pages beyond the ones already attached, or if the text layer looks "
-            "garbled, empty, or missing tables/charts/stamps/signatures the text can't capture). "
-            "The rendered image is provided in the message right after your call."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {"type": "string", "description": "The PDF attachment's file_id."},
-                "page_number": {"type": "integer", "description": "1-indexed page number."},
-            },
-            "required": ["file_id", "page_number"],
-        },
-    },
-}
 
 THINK_TAG_RE = re.compile(r"^\s*(?:<think>)?.*?</think>\s*", re.DOTALL)
 
@@ -218,15 +205,18 @@ def extract_json(text: str):
 # Document text extraction
 # ---------------------------------------------------------------------------
 
-def extract_pdf(data: bytes) -> str:
+def extract_pdf_pages(data: bytes) -> list[str]:
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
-    parts = []
-    for i, page in enumerate(reader.pages):
-        text = (page.extract_text() or "").strip()
-        parts.append(f"--- page {i + 1} ---\n{text}")
-    return "\n\n".join(parts)
+    return [
+        f"--- page {i + 1} ---\n{(page.extract_text() or '').strip()}"
+        for i, page in enumerate(reader.pages)
+    ]
+
+
+def extract_pdf(data: bytes) -> str:
+    return "\n\n".join(extract_pdf_pages(data))
 
 
 def render_pdf_page_b64(data: bytes, page_number: int, dpi: int = PDF_RENDER_DPI) -> str | None:
@@ -272,7 +262,8 @@ def extract_docx(data: bytes) -> str:
     parts = [p.text for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
         for row in table.rows:
-            parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+            # A cell's line breaks would split one row into several lines of evidence.
+            parts.append(" | ".join(" ".join(cell.text.split()) for cell in row.cells))
     return "\n".join(parts)
 
 
@@ -374,6 +365,27 @@ def optimize_image_bytes(data: bytes, max_dim: int = 1800) -> tuple[str, str]:
         return base64.b64encode(data).decode("ascii"), "png"
 
 
+def enlarge_for_model(image_b64: str) -> str:
+    """Gives the model enough pixels per digit. OCR and previews keep the original."""
+    from PIL import Image
+
+    try:
+        image = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("RGB")
+        scale = min(
+            MODEL_IMAGE_SCALE,
+            MODEL_IMAGE_MAX_DIM / max(image.size),
+            (MODEL_IMAGE_MAX_PIXELS / (image.width * image.height)) ** 0.5,
+        )
+        if scale <= 1:
+            return image_b64
+        image = image.resize((int(image.width * scale), int(image.height * scale)), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=95)
+        return base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:  # noqa: BLE001
+        return image_b64
+
+
 @app.route("/")
 def index():
     return send_from_directory("templates", "index.html")
@@ -398,6 +410,7 @@ def upload():
             "ext": out_ext,
             "base64": b64,
             "size": len(data),
+            "original": data,
         }
         return jsonify(
             {
@@ -414,8 +427,13 @@ def upload():
     if not extractor:
         return jsonify({"ok": False, "error": f"Unsupported file type: .{ext}"}), 400
 
+    page_texts = None
     try:
-        text = extractor(data)
+        if ext == "pdf":
+            page_texts = extract_pdf_pages(data)
+            text = "\n\n".join(page_texts)
+        else:
+            text = extractor(data)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"Could not read {filename}: {exc}"}), 400
 
@@ -426,21 +444,27 @@ def upload():
         "text": text,
         "char_count": len(text),
         "size": len(data),
+        "original": data,
     }
 
-    page_images_count = 0
+    try:
+        if ext == "pdf":
+            record["file_tables"], record["pdf_page_tables"] = file_tables.from_pdf(data)
+        elif ext in file_tables.EXTRACTORS:
+            record["file_tables"], record["model_text"] = file_tables.EXTRACTORS[ext](data)
+    except Exception as exc:  # noqa: BLE001
+        # The model reads the tables instead, as it always did.
+        for key in ("file_tables", "model_text", "pdf_page_tables"):
+            record.pop(key, None)
+        print(f"[file_tables] {filename}: tables not read directly: {exc}")
+
     pdf_pages = None
     if ext == "pdf":
         try:
-            total_pages = pdf_page_count(data)
-            render_count = min(total_pages, MAX_AUTO_RENDER_PDF_PAGES)
-            page_images = [render_pdf_page_b64(data, p) for p in range(1, render_count + 1)]
-            record["raw_bytes"] = data  # kept so get_pdf_page_image can render more pages later
-            record["pdf_total_pages"] = total_pages
-            record["pdf_rendered_pages"] = render_count
-            record["pdf_page_images"] = page_images
-            page_images_count = len(page_images)
-            pdf_pages = total_pages
+            pdf_pages = pdf_page_count(data)
+            record["raw_bytes"] = data  # pages are rendered when they are sent to the model
+            record["pdf_total_pages"] = pdf_pages
+            record["pdf_page_texts"] = page_texts
         except Exception as exc:  # noqa: BLE001
             record["pdf_render_error"] = str(exc)
 
@@ -462,7 +486,8 @@ def upload():
             "char_count": len(text),
             "preview": text[:300],
             "pdf_total_pages": pdf_pages,
-            "image_count": page_images_count + embedded_images_count,
+            "image_count": (pdf_pages or 0) + embedded_images_count,
+            "file_table_count": len(record.get("file_tables") or []),
         }
     )
 
@@ -499,112 +524,407 @@ def get_config():
     return host, model
 
 
-def build_attachment_content(attachments):
-    """Returns (text_block, image_b64_list, missing_filenames) for the given attachment refs."""
-    text_blocks = []
-    images = []
-    missing = []
+def split_text(text: str, limit: int = INLINE_CHAR_LIMIT) -> list[str]:
+    """Split text into chunks of at most `limit` chars, on line breaks where possible."""
+    chunks = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut <= 0:
+            cut = limit
+        chunks.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    if text:
+        chunks.append(text)
+    return chunks
+
+
+def make_unit(source, text, image_count=0, load_images=None, page=None, source_text=""):
+    """The smallest piece of an attachment that can go to the model on its own."""
+    return {
+        "source": source,
+        "text": text,
+        "image_count": image_count,
+        "load_images": load_images,  # called only when the unit is actually sent
+        "page": page,
+        "source_text": source_text,  # the document's own text, excluding labels added for the model
+    }
+
+
+def pdf_units(meta):
+    name, total = meta["filename"], meta["pdf_total_pages"]
+    page_texts = meta.get("pdf_page_texts") or []
+    page_tables = meta.get("pdf_page_tables") or {}
+    units = []
+    for page in range(1, total + 1):
+        page_text = page_texts[page - 1] if page <= len(page_texts) else ""
+        note = file_tables.pdf_note(meta["file_tables"], page_tables[page]) if page in page_tables else ""
+        for i, chunk in enumerate(split_text(page_text) or [""]):
+            text = f"### Attached file: {name} (page {page} of {total}, page image attached)\n{chunk}"
+            if note and i == 0:
+                text += "\n" + note
+            own_text = re.sub(r"^--- page \d+ ---\n?", "", chunk)
+            if i == 0:
+                units.append(make_unit(
+                    name, text, image_count=1, page=page, source_text=own_text,
+                    load_images=lambda p=page: [render_pdf_page_b64(meta["raw_bytes"], p)],
+                ))
+            else:
+                units.append(make_unit(name, text, page=page, source_text=own_text))
+    return units
+
+
+def document_units(meta):
+    name = meta["filename"]
+    if "model_text" in meta:
+        # Tables read from the file reach the model only as short placeholders, but the
+        # full text is still the evidence for whatever the model does extract.
+        chunks = split_text(meta["model_text"]) or ["(no text outside the tables)"]
+        sources = [meta["text"]] + [""] * (len(chunks) - 1)
+    else:
+        chunks = split_text(meta["text"]) or ["(no extractable text)"]
+        sources = chunks
+    units = [
+        make_unit(name, f"### Attached file: {name} (section {i} of {len(chunks)})\n{chunk}", source_text=source)
+        for i, (chunk, source) in enumerate(zip(chunks, sources), 1)
+    ]
+    for picture in meta.get("embedded_images") or []:
+        units.append(make_unit(
+            name, f"### Picture embedded in {name}",
+            image_count=1, load_images=lambda b64=picture: [b64],
+        ))
+    return units
+
+
+def build_units(attachments):
+    """Returns (units, missing_filenames, warnings) for the given attachment refs."""
+    units, missing, warnings = [], [], []
     for att in attachments or []:
         file_id = att.get("file_id")
         meta = FILES.get(file_id)
         if not meta:
             missing.append(att.get("filename") or file_id)
-            continue
-        if meta["kind"] == "image":
-            images.append(meta["base64"])
+        elif meta["kind"] == "image":
+            units.append(make_unit(
+                meta["filename"], f"### Attached image: {meta['filename']}",
+                image_count=1, load_images=lambda b64=meta["base64"]: [b64],
+            ))
+        elif meta.get("pdf_total_pages"):
+            units.extend(pdf_units(meta))
         else:
-            text = meta["text"]
-            truncated = len(text) > INLINE_CHAR_LIMIT
-            snippet = text[:INLINE_CHAR_LIMIT]
-            note = (
-                f"\n...[truncated, {len(text) - INLINE_CHAR_LIMIT} more characters — "
-                f"call read_file(file_id=\"{file_id}\") for more]"
-                if truncated
-                else ""
+            if meta.get("pdf_render_error"):
+                warnings.append(
+                    f"{meta['filename']}: page images could not be rendered, so only its text layer "
+                    f"was read ({meta['pdf_render_error']})."
+                )
+            units.extend(document_units(meta))
+    return units, missing, warnings
+
+
+def pack_units(units):
+    """Group units, in order, into parts that fit the per-request image and text limits."""
+    parts, current, images, chars = [], [], 0, 0
+    for unit in units:
+        too_many_images = images + unit["image_count"] > MAX_IMAGES_PER_PART
+        too_much_text = chars + len(unit["text"]) > INLINE_CHAR_LIMIT
+        if current and (too_many_images or too_much_text):
+            parts.append(current)
+            current, images, chars = [], 0, 0
+        current.append(unit)
+        images += unit["image_count"]
+        chars += len(unit["text"])
+    if current:
+        parts.append(current)
+    return parts
+
+
+def describe_units(units):
+    """Human-readable coverage, e.g. 'report.pdf pages 7-12, notes.docx'."""
+    grouped = {}
+    for unit in units:
+        grouped.setdefault(unit["source"], []).append(unit["page"])
+    labels = []
+    for source, pages in grouped.items():
+        pages = [p for p in pages if p is not None]
+        if not pages:
+            labels.append(source)
+        elif min(pages) == max(pages):
+            labels.append(f"{source} page {pages[0]}")
+        else:
+            labels.append(f"{source} pages {min(pages)}-{max(pages)}")
+    return ", ".join(labels)
+
+
+def table_label(table, index):
+    return (isinstance(table, dict) and table.get("title")) or f"Table {index + 1}"
+
+
+def normalize_tables(parsed: dict) -> list[str]:
+    """Give every row its table's column count without discarding any cell.
+
+    Mutates `parsed` and returns a warning for each table that needed repair. Safe to
+    run repeatedly: an already-rectangular table comes through unchanged.
+    """
+    tables = parsed.get("tables")
+    if tables is None:
+        return []
+    if not isinstance(tables, list):
+        parsed["tables"] = []
+        return ['Model returned "tables" in an unexpected format, so it could not be read.']
+
+    warnings, clean = [], []
+    for index, table in enumerate(tables):
+        if not isinstance(table, dict):
+            warnings.append(f"Table {index + 1} was in an unexpected format and was skipped.")
+            continue
+
+        headers = table.get("headers")
+        headers = list(headers) if isinstance(headers, list) else []
+        rows = []
+        for row in table.get("rows") if isinstance(table.get("rows"), list) else []:
+            if isinstance(row, dict):
+                row = list(row.values())
+            rows.append(list(row) if isinstance(row, list) else [row])
+
+        label = table_label(table, index)
+        width = max([len(headers)] + [len(row) for row in rows])
+        long_rows = sum(len(row) > len(headers) for row in rows)
+        short_rows = sum(len(row) < len(headers) for row in rows)
+        if long_rows:
+            warnings.append(
+                f'"{label}": {long_rows} row(s) had more cells than headers. The extra cells were '
+                f'kept under "Extra Column" headers — check that those rows line up.'
+            )
+        if short_rows:
+            warnings.append(
+                f'"{label}": {short_rows} row(s) had fewer cells than headers. Blanks were added at '
+                f"the end of each — check that those rows line up."
             )
 
-            extra_notes = []
-            if meta.get("pdf_page_images"):
-                images.extend(meta["pdf_page_images"])
-                rendered, total = meta["pdf_rendered_pages"], meta["pdf_total_pages"]
-                if not text.strip():
-                    extra_notes.append(
-                        f"(No selectable text layer — this looks like a scanned PDF. "
-                        f"Pages 1-{rendered} of {total} are ALREADY attached as images below for you to read visually "
-                        f"— do not call get_pdf_page_image for these, you already have them.)"
-                    )
-                else:
-                    extra_notes.append(
-                        f"(Pages 1-{rendered} of {total} are ALREADY attached as images below "
-                        f"— do not re-fetch these via get_pdf_page_image.)"
-                    )
-                if total > rendered:
-                    extra_notes.append(
-                        f"Only pages {rendered + 1}-{total} are NOT yet attached — call "
-                        f"get_pdf_page_image(file_id=\"{file_id}\", page_number=N) for one of those specific pages "
-                        f"only if you actually need it."
-                    )
-            elif meta.get("pdf_render_error"):
-                extra_notes.append(f"(Could not render page images: {meta['pdf_render_error']})")
+        headers += [f"Extra Column {n}" for n in range(1, width - len(headers) + 1)]
+        clean.append({
+            **table,
+            "headers": headers,
+            "rows": [row + [""] * (width - len(row)) for row in rows],
+        })
 
-            if meta.get("embedded_images"):
-                images.extend(meta["embedded_images"])
-                extra_notes.append(f"({len(meta['embedded_images'])} embedded picture(s) from this file also attached below.)")
+    parsed["tables"] = clean
+    return warnings
 
-            extra = ("\n" + "\n".join(extra_notes)) if extra_notes else ""
-            text_blocks.append(
-                f"### Attached file: {meta['filename']} (file_id: {file_id}, {meta['char_count']} chars)\n{snippet}{note}{extra}"
+
+def same_cells(a, b) -> bool:
+    return [str(c).strip().lower() for c in a] == [str(c).strip().lower() for c in b]
+
+
+def merge_part_results(results: list[dict]) -> dict:
+    """Combine per-part replies, joining a table that continues across a part boundary."""
+    merged = dict(results[0])
+    merged["key_info"] = {}
+    merged["tables"] = []
+    merged["sections"] = []
+    confidences = []
+
+    for result in results:
+        for field in ("image_type", "summary", "primary_name", "concise_topic"):
+            if not merged.get(field) and result.get(field):
+                merged[field] = result[field]
+        if isinstance(result.get("confidence"), (int, float)):
+            confidences.append(result["confidence"])
+
+        key_info = result.get("key_info")
+        if isinstance(key_info, dict):
+            for key, value in key_info.items():
+                if key not in merged["key_info"]:
+                    merged["key_info"][key] = value
+
+        sections = result.get("sections")
+        for section in sections if isinstance(sections, list) else []:
+            if not isinstance(section, dict):
+                continue
+            existing = next((s for s in merged["sections"] if s.get("title") == section.get("title")), None)
+            items = section.get("items") if isinstance(section.get("items"), list) else []
+            if existing:
+                existing["items"].extend(items)
+            else:
+                merged["sections"].append({**section, "items": list(items)})
+
+        for position, table in enumerate(result.get("tables") or []):
+            previous = merged["tables"][-1] if merged["tables"] else None
+            continues = (
+                position == 0
+                and previous is not None
+                and str(previous.get("title")).strip().lower() == str(table.get("title")).strip().lower()
+                and same_cells(previous["headers"], table["headers"])
             )
-    return "\n\n".join(text_blocks), images, missing
+            if continues:
+                previous["rows"].extend(r for r in table["rows"] if not same_cells(r, table["headers"]))
+            else:
+                merged["tables"].append({**table, "rows": list(table["rows"])})
+
+    if confidences:
+        merged["confidence"] = min(confidences)  # the result is only as sure as its weakest part
+    return merged
 
 
-def run_read_file_tool(args):
-    file_id = args.get("file_id", "")
-    offset = int(args.get("offset") or 0)
-    length = int(args.get("length") or TOOL_CHUNK_CHARS)
-    meta = FILES.get(file_id)
-    if not meta or meta["kind"] != "document":
-        return {"error": f"Unknown file_id: {file_id}"}
-    text = meta["text"]
-    chunk = text[offset : offset + length]
-    return {
-        "file_id": file_id,
-        "filename": meta["filename"],
-        "offset": offset,
-        "returned_chars": len(chunk),
-        "total_chars": len(text),
-        "has_more": offset + length < len(text),
-        "content": chunk,
-    }
+def add_file_tables(parsed, attachments):
+    """Puts tables read from the files first, dropping any the model typed out anyway."""
+    exact = [t for a in attachments or [] for t in FILES.get(a.get("file_id"), {}).get("file_tables") or []]
+    if not exact:
+        return
+    exact = json.loads(json.dumps(exact))  # the upload keeps its own copy
+    model_tables = [
+        t for t in parsed.get("tables") or []
+        if not any(file_tables.same_table(t, e) for e in exact)
+    ]
+    parsed["tables"] = exact + model_tables
 
 
-def run_get_pdf_page_tool(args):
-    """Returns (ack_dict, image_b64_or_None). Ollama tool-result messages are text-only,
-    so the image (if any) has to be delivered as a separate user-role message right after —
-    there's no way to attach media to a role:"tool" message itself."""
-    file_id = args.get("file_id", "")
+def build_part_text(message, part, index, count, last_table):
+    sections = [message]
+    if count > 1:
+        sections.append(
+            f"(This is part {index} of {count} of the attached content, covering "
+            f"{describe_units(part)}. Extract only what is in this part.)"
+        )
+    if last_table:
+        sections.append(
+            "(The previous part's last table was titled "
+            f"{json.dumps(last_table.get('title'), ensure_ascii=False)} with headers "
+            f"{json.dumps(last_table.get('headers'), ensure_ascii=False)}. If this part continues "
+            "that table, reuse that exact title and those exact headers.)"
+        )
+    sections.extend(unit["text"] for unit in part)
+    return "\n\n".join(sections)
+
+
+def load_part_images(part, warnings):
+    images = []
+    for unit in part:
+        if not unit["load_images"]:
+            continue
+        try:
+            images.extend(image for image in unit["load_images"]() if image)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Could not render {describe_units([unit])}, so only its text was read: {exc}")
+    return images
+
+
+def collect_evidence(units):
+    """Read the document independently of the vision model. Never raises: verification is
+    an addition to extraction, so a failure here costs evidence, not the result."""
+    evidence = SourceEvidence()
+    ocr_used = 0
+    ocr_skipped = []
+    for unit in units:
+        own_text = unit["source_text"]
+        if len(re.sub(r"\W", "", own_text)) >= MIN_TEXT_LAYER_CHARS or (own_text.strip() and not unit["load_images"]):
+            evidence.add_text(own_text, unit["source"])
+            continue
+        if not unit["load_images"]:
+            continue
+        if ocr_used >= MAX_OCR_IMAGES:
+            ocr_skipped.append(unit)
+            continue
+        ocr_used += 1
+        try:
+            import ocr_engine
+
+            for image in unit["load_images"]():
+                evidence.add_ocr(ocr_engine.read_image_b64(image), describe_units([unit]), image=image)
+        except Exception as exc:  # noqa: BLE001
+            evidence.notes.append(f"OCR failed for {describe_units([unit])}, so its values weren't source-checked: {exc}")
+    if ocr_skipped:
+        evidence.notes.append(f"OCR limit reached, so these weren't source-checked: {describe_units(ocr_skipped)}.")
+    return evidence
+
+
+def verify_and_repair(parsed, evidence_future, warnings, host, model, row_alternatives=None):
+    """Verify, fix digits from the model's second choices, re-read what's still flagged, verify again.
+
+    Returns (verification or None, repair_seconds, repair_calls).
+    """
     try:
-        page_number = int(args.get("page_number"))
-    except (TypeError, ValueError):
-        return {"error": "page_number must be an integer"}, None
+        evidence = evidence_future.result() if evidence_future else SourceEvidence()
+        warnings.extend(evidence.notes)
+        verification = verify_record(parsed, evidence)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"Verification couldn't run, so nothing in this result has been checked: {exc}")
+        return None, 0, 0
 
-    meta = FILES.get(file_id)
-    if not meta or meta.get("ext") != "pdf" or "raw_bytes" not in meta:
-        return {"error": f"Unknown PDF file_id: {file_id}"}, None
+    def ask_model(system, prompt, image_b64):
+        reply = call_model(host, model, [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt, "images": [image_b64]},
+        ])
+        return extract_json(reply)
 
-    image_b64 = render_pdf_page_b64(meta["raw_bytes"], page_number)
-    if image_b64 is None:
-        return {"error": f"Page {page_number} out of range (file has {meta.get('pdf_total_pages')} pages)"}, None
+    started = time.monotonic()
+    repairs, calls = [], 0
+    try:
+        repairs = digit_repair.repair_tables(parsed, verification, row_alternatives)
+        if repairs:
+            verification = verify_record(parsed, evidence)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"Checking the model's second choices failed, so that step was skipped: {exc}")
+    try:
+        reread, notes, calls = repair.repair_tables(parsed, verification, evidence, ask_model)
+        repairs = repairs + reread
+        warnings.extend(notes)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"Re-reading flagged rows failed, so they were left as they were: {exc}")
+    repair_seconds = round(time.monotonic() - started, 2)
 
-    return (
-        {
-            "file_id": file_id,
-            "filename": meta["filename"],
-            "page_number": page_number,
-            "status": "Image attached in the next message.",
+    if repairs:
+        verification = verify_record(parsed, evidence)
+    verification["repairs"] = repairs
+    verification["summary"]["repaired"] = len(repairs)
+    for item in repairs:
+        table_check = verification["tables"][item["table"]]
+        column = parsed["tables"][item["table"]]["headers"].index(item["column"]) if item["column"] in parsed["tables"][item["table"]]["headers"] else None
+        if column is None:
+            continue
+        cell = table_check["cells"][item["row"]][column]
+        if item.get("method") == "second_choice_digit":
+            # The sum this value was chosen to satisfy can't also be what verifies it.
+            if cell["status"] == VERIFIED and not any(note.startswith("matches ") for note in cell["evidence"]):
+                cell["status"] = UNCHECKED
+                verification["summary"][VERIFIED] -= 1
+                verification["summary"][UNCHECKED] += 1
+            cell["evidence"].insert(
+                0, f'corrected from "{item["before"]}": the second choice for one digit, and the only such change that makes the sums hold'
+            )
+        else:
+            cell["evidence"].insert(0, f'corrected from "{item["before"]}" by a zoomed re-read')
+    for table in verification["tables"]:
+        # Positions in this run's OCR mean nothing once saved.
+        table.pop("row_sources", None)
+        table.pop("column_centres", None)
+        for line in table["suspected_missing_rows"]:
+            warnings.append(f'"{table["title"]}": a row in the document may be missing from the table: {line}')
+    return verification, repair_seconds, calls
+
+
+def request_model(host, model, messages, alternatives=False):
+    extra = {"logprobs": True, "top_logprobs": MODEL_ALTERNATIVES} if alternatives else {}
+    resp = requests.post(
+        f"{host}/api/chat",
+        json={
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "options": MODEL_OPTIONS,
+            "keep_alive": MODEL_KEEP_ALIVE,
+            **extra,
         },
-        image_b64,
+        headers={"ngrok-skip-browser-warning": "true"},
+        timeout=REQUEST_TIMEOUT,
     )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def call_model(host, model, messages):
+    return request_model(host, model, messages).get("message", {}).get("content", "")
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -616,7 +936,7 @@ def chat():
     history = body.get("history", [])
     attachments = body.get("attachments", [])
 
-    attach_text, images, missing = build_attachment_content(attachments)
+    units, missing, warnings = build_units(attachments)
     if missing:
         return jsonify(
             {
@@ -628,123 +948,129 @@ def chat():
             }
         ), 400
 
-    user_content = message
-    if attach_text:
-        user_content = f"{message}\n\n{attach_text}"
+    parts = pack_units(units) or [[]]
+    part_count = len(parts)
+    if part_count > MAX_PARTS_PER_REQUEST:
+        skipped = [unit for part in parts[MAX_PARTS_PER_REQUEST:] for unit in part]
+        warnings.append(
+            f"This attachment is too large to process in one request, so this result is INCOMPLETE. "
+            f"Not processed: {describe_units(skipped)}."
+        )
+        parts = parts[:MAX_PARTS_PER_REQUEST]
+        part_count = len(parts)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    base_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for turn in history:
         role = turn.get("role")
         content = turn.get("content")
         if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
+            base_messages.append({"role": role, "content": content})
 
-    user_msg = {"role": "user", "content": user_content}
-    if images:
-        user_msg["images"] = images
-    messages.append(user_msg)
+    # OCR runs alongside the model, which is remote, so the two don't add up to the sum of both.
+    processed_units = [unit for part in parts for unit in part]
+    executor = ThreadPoolExecutor(max_workers=1)
+    evidence_future = executor.submit(collect_evidence, processed_units) if processed_units else None
+    executor.shutdown(wait=False)
 
-    tools_used = []
-    # Confirmed live against this Kaggle instance: qwen3-vl:8b breaks when "tools" is present
-    # on a request that also carries an image — content comes back empty, thinking runs to
-    # ~10k chars, and it sometimes hallucinates a tool call that was never asked for. Tool
-    # calling and vision don't mix on this model build, so tools are disabled for any turn
-    # that has an image in it (including one just injected by get_pdf_page_image below).
-    has_images_this_turn = bool(images)
-    try:
-        for iteration in range(MAX_TOOL_ITERATIONS):
-            payload = {
-                "model": model,
-                "messages": messages,
-                "stream": False,
-                "think": False,
-            }
-            has_docs = any(FILES.get(a.get("file_id"), {}).get("kind") == "document" for a in attachments)
-            has_pdf = any(FILES.get(a.get("file_id"), {}).get("ext") == "pdf" for a in attachments)
-            tools = []
-            if not has_images_this_turn:
-                if has_docs:
-                    tools.append(READ_FILE_TOOL)
-                if has_pdf:
-                    tools.append(GET_PDF_PAGE_TOOL)
-            if tools:
-                payload["tools"] = tools
+    results = []
+    row_alternatives = {}
+    raw_replies = []
+    parse_error = None
+    request_error = None
 
-            resp = requests.post(
-                f"{host}/api/chat",
-                json=payload,
-                headers={"ngrok-skip-browser-warning": "true"},
-                timeout=REQUEST_TIMEOUT,
-            )
-            resp.raise_for_status()
-            resp_msg = resp.json().get("message", {})
-            tool_calls = resp_msg.get("tool_calls") or []
+    for index, part in enumerate(parts, 1):
+        last_tables = results[-1].get("tables") if results else None
+        user_msg = {
+            "role": "user",
+            "content": build_part_text(message, part, index, part_count, last_tables[-1] if last_tables else None),
+        }
+        images = load_part_images(part, warnings)
+        if images:
+            if len(images) <= MAX_IMAGES_TO_ENLARGE:
+                images = [enlarge_for_model(image) for image in images]
+            user_msg["images"] = images
 
-            if not tool_calls:
-                raw_content = resp_msg.get("content", "")
-                break
+        try:
+            # Second choices only help with misread scans and pictures, and add megabytes of reply.
+            reply = request_model(host, model, base_messages + [user_msg], alternatives=bool(images))
+            raw_content = reply.get("message", {}).get("content", "")
+        except requests.exceptions.RequestException as exc:
+            # The model is unreachable, so later parts would only wait out the same timeout.
+            request_error = exc
+            remaining = [unit for later in parts[index - 1:] for unit in later]
+            if remaining:
+                warnings.append(f"Model request failed, so this result is INCOMPLETE. Not processed: {describe_units(remaining)}.")
+            break
 
-            messages.append(resp_msg)
-            for call in tool_calls:
-                fn = call.get("function", {})
-                name = fn.get("name")
-                args = fn.get("arguments") or {}
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {}
-                if name == "read_file":
-                    result = run_read_file_tool(args)
-                    tools_used.append({"name": name, "args": args})
-                    messages.append({"role": "tool", "content": json.dumps(result)})
-                elif name == "get_pdf_page_image":
-                    result, image_b64 = run_get_pdf_page_tool(args)
-                    tools_used.append({"name": name, "args": args})
-                    messages.append({"role": "tool", "content": json.dumps(result)})
-                    if image_b64:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": f"(page {args.get('page_number')} of {result.get('filename', 'the PDF')} you requested)",
-                                "images": [image_b64],
-                            }
-                        )
-                        has_images_this_turn = True  # disable tools on the next iteration too
-                else:
-                    result = {"error": f"Unknown tool: {name}"}
-                    tools_used.append({"name": name, "args": args})
-                    messages.append({"role": "tool", "content": json.dumps(result)})
-        else:
-            raw_content = resp_msg.get("content", "")
-    except requests.exceptions.RequestException as exc:
-        return jsonify({"ok": False, "error": f"Could not reach {host}: {exc}"}), 502
+        raw_replies.append(strip_think(raw_content))
+        try:
+            parsed_part = extract_json(raw_content)
+            if not isinstance(parsed_part, dict):
+                raise ValueError("Expected a JSON object")
+        except ValueError as exc:  # json.JSONDecodeError is a ValueError
+            parse_error = parse_error or str(exc)
+            if part_count > 1:
+                warnings.append(f"Model reply wasn't valid JSON, so this result is INCOMPLETE. Not processed: {describe_units(part)}.")
+            continue
 
-    elapsed = round(time.monotonic() - start_time, 2)
-    visible = strip_think(raw_content)
+        warnings.extend(normalize_tables(parsed_part))
+        results.append(parsed_part)
+        row_alternatives.update(digit_repair.by_row(digit_repair.digit_alternatives(raw_content, reply.get("logprobs")), parsed_part))
+
+    if request_error is not None and not results:
+        return jsonify({"ok": False, "error": f"Could not reach {host}: {request_error}"}), 502
 
     parsed = None
-    parse_error = None
     category = None
     suggested_filename = "document_data.json"
 
-    try:
-        parsed = extract_json(raw_content)
-        if isinstance(parsed, dict):
-            # Extract category identified by the model
-            category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
-            
-            # Determine source filename prefix if available
-            orig_name = "document"
-            if attachments and len(attachments) > 0:
-                first_att = attachments[0]
-                orig_name = first_att.get("filename") or FILES.get(first_att.get("file_id"), {}).get("filename", "document")
-            
-            # Generate dynamic filename: name_concisetopicin2-3words.json
-            suggested_filename = generate_suggested_filename(parsed, orig_name)
+    if results:
+        parsed = merge_part_results(results)
+        parse_error = None
+        add_file_tables(parsed, attachments)
 
-    except json.JSONDecodeError as exc:
-        parse_error = str(exc)
+        # Extract category identified by the model
+        category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
+
+        # Determine source filename prefix if available
+        orig_name = "document"
+        if attachments and len(attachments) > 0:
+            first_att = attachments[0]
+            orig_name = first_att.get("filename") or FILES.get(first_att.get("file_id"), {}).get("filename", "document")
+
+        # Generate dynamic filename: name_concisetopicin2-3words.json
+        suggested_filename = generate_suggested_filename(parsed, orig_name)
+
+    extraction_seconds = round(time.monotonic() - start_time, 2)
+    verification = None
+    repair_seconds = repair_calls = 0
+    if parsed and processed_units:
+        verification, repair_seconds, repair_calls = verify_and_repair(parsed, evidence_future, warnings, host, model, row_alternatives)
+
+    # History holds the data itself: a re-read may have changed it, and checks would only add noise.
+    if parsed and (part_count > 1 or (verification and verification.get("repairs"))):
+        visible = json.dumps(parsed, ensure_ascii=False)
+    else:
+        visible = "\n\n".join(raw_replies)
+
+    if verification:
+        parsed["verification"] = verification
+    if parsed and warnings:
+        parsed["extraction_warnings"] = warnings
+
+    record = None
+    if parsed and processed_units:
+        try:
+            sources = [
+                (FILES[a["file_id"]]["filename"], FILES[a["file_id"]]["original"])
+                for a in attachments
+                if FILES.get(a.get("file_id"), {}).get("original")
+            ]
+            record = records.save_record(parsed, category, suggested_filename, generate_excel_bytes, sources=sources)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"This result couldn't be saved to Records: {exc}")
+
+    elapsed = round(time.monotonic() - start_time, 2)
 
     return jsonify(
         {
@@ -753,7 +1079,14 @@ def chat():
             "parsed": parsed,
             "parse_error": parse_error,
             "elapsed_seconds": elapsed,
-            "tools_used": tools_used,
+            "parts_processed": len(results),
+            "warnings": warnings,
+            "timing": {
+                "extraction_seconds": extraction_seconds,
+                "repair_seconds": repair_seconds,
+                "repair_calls": repair_calls,
+            },
+            "record": record,
             "category": category,
             "suggested_filename": suggested_filename,
             "original_filename": suggested_filename,
@@ -915,8 +1248,79 @@ def save_to_db():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+NUMERIC_CELL_RE = re.compile(r"^(-?)(0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{2,3})*,\d{3})(?:\.(\d+))?$")
+
+
+def clean_excel_text(value) -> str:
+    """openpyxl refuses to write control characters, which would fail the whole export."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    return ILLEGAL_CHARACTERS_RE.sub("", str(value))
+
+
+def excel_cell_value(raw):
+    """Returns (value, number_format). Only values that survive as numbers become numbers.
+
+    Everything else stays text exactly as extracted: codes with leading zeros ('00123'),
+    ambiguous separators ('12,50'), and anything too long for Excel's 15-digit precision.
+    Number formats keep the source's decimal places, so '12.50' still displays as 12.50.
+    """
+    if raw is None:
+        return "", None
+    if isinstance(raw, (list, dict)):
+        raw = json.dumps(raw, ensure_ascii=False)
+    text = clean_excel_text(raw)
+
+    stripped = text.strip()
+    match = NUMERIC_CELL_RE.match(stripped)
+    if not match:
+        return text, None
+
+    sign, whole, decimals = match.groups()
+    digits = whole.replace(",", "") + (decimals or "")
+    if len(digits) > MAX_EXCEL_DIGITS or (sign and not digits.strip("0")):
+        return text, None
+
+    whole_format = "#,##0" if "," in whole else "0"
+    plain = stripped.replace(",", "")
+    if decimals:
+        return float(plain), f"{whole_format}.{'0' * len(decimals)}"
+    return int(plain), whole_format
+
+
+def header_levels(headers) -> list[list[str]]:
+    """Recover grouped headers from flat names like 'CET - Intake'.
+
+    A prefix only counts as a group when a neighbouring column shares it, so a lone
+    header that happens to contain ' - ' stays whole.
+    """
+    parts = [[p.strip() for p in str(h).split(" - ")] for h in headers]
+    levels = []
+    for i, part in enumerate(parts):
+        shared = len(part) > 1 and any(
+            0 <= j < len(parts) and len(parts[j]) > 1 and parts[j][0] == part[0]
+            for j in (i - 1, i + 1)
+        )
+        levels.append(part if shared else [str(headers[i])])
+    return levels
+
+
+def section_as_table(section: dict, section_index: int) -> dict:
+    """Shape a section's entries as a table."""
+    items = [i if isinstance(i, dict) else {"value": i} for i in section.get("items") or []]
+    keys = list(dict.fromkeys(key for item in items for key in item))
+    return {
+        "title": section.get("title") or f"Section {section_index + 1}",
+        "headers": [key.replace("_", " ").title() for key in keys],
+        "rows": [[item.get(key, "") for key in keys] for item in items],
+    }
+
+
 def generate_excel_bytes(parsed: dict, filename: str = "") -> bytes:
-    """Build an in-memory .xlsx workbook with professional formatting from parsed table data."""
+    """Build a workbook holding only the document's data, in the document's layout.
+
+    Verification results stay in the record's JSON and the app, never in the workbook.
+    """
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -924,16 +1328,11 @@ def generate_excel_bytes(parsed: dict, filename: str = "") -> bytes:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    tables = parsed.get("tables") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        parsed = {"summary": str(parsed)}
 
-    # Fallback if no tables extracted
-    if not tables or not isinstance(tables, list):
-        headers = ["Field", "Extracted Value"]
-        key_info = parsed.get("key_info", {}) if isinstance(parsed, dict) else {}
-        rows = [[k.replace("_", " ").title(), str(v)] for k, v in key_info.items()]
-        if not rows:
-            rows = [["Summary", str(parsed.get("summary", ""))] if isinstance(parsed, dict) else ["Data", str(parsed)]]
-        tables = [{"title": parsed.get("summary", "Extracted Data") if isinstance(parsed, dict) else "Data", "headers": headers, "rows": rows}]
+    # The client sends `parsed` back for export, so it can't be assumed to be normalized.
+    normalize_tables(parsed)
 
     thin_border = Border(
         left=Side(style='thin', color='CBD5E1'),
@@ -957,39 +1356,73 @@ def generate_excel_bytes(parsed: dict, filename: str = "") -> bytes:
     even_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
     odd_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
 
-    for t_idx, tbl in enumerate(tables):
-        if not isinstance(tbl, dict):
-            continue
-        title = tbl.get("title") or f"Table {t_idx + 1}"
-        safe_title = re.sub(r"[\\/*?:\[\]]", "_", title)[:30].strip() or f"Sheet{t_idx+1}"
+    def write_table(tbl, index):
+        """Writes one table to its own sheet."""
+        title = clean_excel_text(tbl.get("title") or f"Table {index + 1}")
+        safe_title = re.sub(r"[\\/*?:\[\]]", "_", title)[:30].strip() or f"Sheet{index + 1}"
         ws = wb.create_sheet(title=safe_title)
         ws.views.sheetView[0].showGridLines = True
 
         headers = tbl.get("headers") or []
         rows = tbl.get("rows") or []
-
         curr_row = 1
 
         # Title Row Banner
-        if title:
-            max_cols = max(len(headers), 1)
+        max_cols = max(len(headers), 1)
+        title_cell = ws.cell(row=curr_row, column=1, value=title)
+        title_cell.data_type = "s"
+        title_cell.font = Font(name="Calibri", size=11, bold=True, color="0F172A")
+        title_cell.alignment = Alignment(horizontal="left", vertical="center")
+        if max_cols > 1:
             ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=max_cols)
-            title_cell = ws.cell(row=curr_row, column=1, value=title)
-            title_cell.font = Font(name="Calibri", size=11, bold=True, color="0F172A")
-            title_cell.alignment = Alignment(horizontal="left", vertical="center")
-            ws.row_dimensions[curr_row].height = 24
-            curr_row += 1
-
-        # Header Row
-        header_row_num = curr_row
-        ws.row_dimensions[header_row_num].height = 32
-        for col_idx, h in enumerate(headers, 1):
-            cell = ws.cell(row=header_row_num, column=col_idx, value=str(h))
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.border = thin_border
+        ws.row_dimensions[curr_row].height = 24
         curr_row += 1
+
+        # Grouped Header Rows, as in the source document
+        levels = header_levels(headers)
+        depth = max((len(level) for level in levels), default=1)
+        header_top = curr_row
+        for level_index in range(depth):
+            ws.row_dimensions[header_top + level_index].height = 32 if level_index == depth - 1 else 22
+            for col_idx in range(1, len(headers) + 1):
+                level = levels[col_idx - 1]
+                text = level[level_index] if level_index < len(level) else None
+                cell = ws.cell(row=header_top + level_index, column=col_idx)
+                if text is not None:
+                    cell.value = clean_excel_text(text)
+                    cell.data_type = "s"
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.border = thin_border
+
+        for col_idx, level in enumerate(levels, 1):
+            if len(level) < depth:
+                ws.merge_cells(
+                    start_row=header_top + len(level) - 1, start_column=col_idx,
+                    end_row=header_top + depth - 1, end_column=col_idx,
+                )
+        for level_index in range(depth - 1):
+            col_idx = 0
+            while col_idx < len(levels):
+                level = levels[col_idx]
+                end = col_idx
+                if len(level) > level_index + 1:
+                    while (
+                        end + 1 < len(levels)
+                        and len(levels[end + 1]) > level_index + 1
+                        and levels[end + 1][:level_index + 1] == level[:level_index + 1]
+                    ):
+                        end += 1
+                    if end > col_idx:
+                        ws.merge_cells(
+                            start_row=header_top + level_index, start_column=col_idx + 1,
+                            end_row=header_top + level_index, end_column=end + 1,
+                        )
+                col_idx = end + 1
+        curr_row = header_top + depth
+        first_data_row = curr_row
+        ws.freeze_panes = ws.cell(row=first_data_row, column=1)
 
         # Data Rows
         for r_idx, row in enumerate(rows):
@@ -1005,31 +1438,18 @@ def generate_excel_bytes(parsed: dict, filename: str = "") -> bytes:
             row_border = double_bottom_border if is_total_row else thin_border
 
             for col_idx in range(1, len(headers) + 1):
-                raw_val = row[col_idx - 1] if col_idx - 1 < len(row) else ""
-                val = raw_val
+                val, number_format = excel_cell_value(row[col_idx - 1])
+                is_num = number_format is not None
+                align_horiz = "right" if is_num else "left"
 
-                # Attempt numeric conversion
-                val_str = str(raw_val).strip() if raw_val is not None else ""
-                val_clean = val_str.replace(",", "")
-                is_num = False
-                align_horiz = "left"
-
-                if val_clean.lstrip("-").isdigit():
-                    val = int(val_clean)
-                    is_num = True
-                    align_horiz = "right"
-                elif re.match(r"^-?\d+\.\d+$", val_clean):
-                    try:
-                        val = float(val_clean)
-                        is_num = True
-                        align_horiz = "right"
-                    except ValueError:
-                        pass
-
-                if col_idx == 1 and (is_num or len(val_str) <= 4):
+                if col_idx == 1 and (is_num or len(str(val).strip()) <= 4):
                     align_horiz = "center"
 
                 cell = ws.cell(row=curr_row, column=col_idx, value=val)
+                if is_num:
+                    cell.number_format = number_format
+                else:
+                    cell.data_type = "s"  # extracted text like "=1+1" must not run as a formula
                 cell.font = row_font
                 cell.fill = row_fill
                 cell.alignment = Alignment(horizontal=align_horiz, vertical="center")
@@ -1040,12 +1460,45 @@ def generate_excel_bytes(parsed: dict, filename: str = "") -> bytes:
         # Auto-adjust column widths
         for col_idx in range(1, len(headers) + 1):
             col_letter = get_column_letter(col_idx)
-            max_len = 0
-            for r in range(header_row_num, curr_row):
+            max_len = len(levels[col_idx - 1][-1])
+            for r in range(first_data_row, curr_row):
                 c_val = ws.cell(row=r, column=col_idx).value
                 if c_val is not None:
                     max_len = max(max_len, len(str(c_val)))
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 11), 60)
+
+    def field_rows():
+        """Every non-table value printed in the document."""
+        rows = []
+        key_info = parsed.get("key_info")
+        for key, value in (key_info.items() if isinstance(key_info, dict) else []):
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            rows.append([key.replace("_", " ").title(), "" if value is None else value])
+        name = parsed.get("primary_name")
+        if name and not any(str(value).strip() == str(name).strip() for _, value in rows):
+            rows.insert(0, ["Name", name])
+        return rows
+
+    tables = parsed.get("tables") if isinstance(parsed.get("tables"), list) else []
+    for t_idx, tbl in enumerate(tables):
+        write_table(tbl, t_idx)
+
+    info_rows = field_rows()
+    if info_rows:
+        write_table({"title": "Document Info", "headers": ["Field", "Value"], "rows": info_rows}, len(wb.sheetnames))
+
+    sections = parsed.get("sections") if isinstance(parsed.get("sections"), list) else []
+    for s_idx, section in enumerate(sections):
+        if isinstance(section, dict) and section.get("items"):
+            write_table(section_as_table(section, s_idx), len(wb.sheetnames))
+
+    # A workbook needs one sheet, so a document with no fields or tables keeps its description.
+    if not wb.sheetnames:
+        write_table(
+            {"title": "Document Info", "headers": ["Field", "Value"], "rows": [["Summary", parsed.get("summary") or ""]]},
+            0,
+        )
 
     bio = io.BytesIO()
     wb.save(bio)
@@ -1078,62 +1531,18 @@ def export_excel():
 
 @app.route("/api/save-local", methods=["POST"])
 def save_local():
-    """Save extracted JSON and Excel to a local folder based on category, named name_concisetopicin2-3words.json/.xlsx."""
+    """Save extracted JSON and Excel to the record library."""
     body = request.get_json(force=True) or {}
     parsed = body.get("parsed")
-    category = body.get("category")
-    filename = body.get("filename", "")
-
     if not parsed or not isinstance(parsed, dict):
         return jsonify({"ok": False, "error": "Invalid parsed JSON data"}), 400
 
-    if not category:
-        category = str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
-
-    category_slug = re.sub(r"[^\w\-_]", "_", category).replace("__", "_").strip("_") or "other"
-
-    # Ensure standardized filename: name_concisetopicin2-3words.json
-    if not filename or filename in ("document.json", f"{category}.json", "extracted.json"):
-        save_filename = generate_suggested_filename(parsed)
-    else:
-        name_base = os.path.splitext(os.path.basename(filename))[0]
-        clean_name = re.sub(r"[^\w\-_]", "_", name_base).strip("_") or "extracted"
-        save_filename = f"{clean_name}.json"
-
-    category_dir = os.path.join(os.path.dirname(__file__), "exports", category_slug)
-    os.makedirs(category_dir, exist_ok=True)
-
-    full_save_path = os.path.join(category_dir, save_filename)
-
+    category = body.get("category") or str(parsed.get("image_type") or parsed.get("category") or "other").strip().lower()
     try:
-        with open(full_save_path, "w", encoding="utf-8") as f:
-            json.dump(parsed, f, indent=2, ensure_ascii=False)
-        saved_path = os.path.relpath(full_save_path, os.path.dirname(__file__)).replace("\\", "/")
-        print(f"[Export] Saved locally: {saved_path}")
-
-        # Also generate and save Excel file if tables are present
-        excel_saved_path = None
-        if parsed.get("tables"):
-            try:
-                base_clean = os.path.splitext(save_filename)[0]
-                excel_filename = f"{base_clean}.xlsx"
-                excel_full_path = os.path.join(category_dir, excel_filename)
-                excel_bytes = generate_excel_bytes(parsed, excel_filename)
-                with open(excel_full_path, "wb") as f_excel:
-                    f_excel.write(excel_bytes)
-                excel_saved_path = os.path.relpath(excel_full_path, os.path.dirname(__file__)).replace("\\", "/")
-                print(f"[Export] Saved Excel locally: {excel_saved_path}")
-            except Exception as e_err:
-                print(f"[Export] Could not write local Excel: {e_err}")
-
-        return jsonify({
-            "ok": True,
-            "saved_path": saved_path,
-            "filename": save_filename,
-            "excel_saved_path": excel_saved_path
-        })
-    except Exception as exc:
+        saved = records.save_record(parsed, category, body.get("filename") or generate_suggested_filename(parsed), generate_excel_bytes)
+    except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True, **saved})
 
 
 @app.route("/api/open-folder", methods=["POST"])
@@ -1156,6 +1565,9 @@ def open_folder():
         return jsonify({"ok": True, "opened": target_dir})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+app.register_blueprint(records.create_blueprint(generate_excel_bytes))
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

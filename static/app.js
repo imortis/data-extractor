@@ -276,7 +276,78 @@ function syntaxHighlight(json) {
   );
 }
 
-function renderTablePreview(tbl, idx) {
+const STATUS_LABELS = {
+  verified: "verified",
+  unchecked: "unchecked",
+  conflict: "conflict",
+  source_inconsistent: "source inconsistent",
+};
+
+function statusClass(status) {
+  return STATUS_LABELS[status] ? `trust-${status.replace(/_/g, "-")}` : "";
+}
+
+function renderVerificationSummary(verification) {
+  const box = document.createElement("div");
+  box.className = "verification-summary";
+  Object.keys(STATUS_LABELS).forEach((status) => {
+    const count = verification.summary[status] || 0;
+    if (!count) return;
+    const chip = document.createElement("span");
+    chip.className = `trust-chip ${statusClass(status)}`;
+    chip.textContent = `${count} ${STATUS_LABELS[status]}`;
+    box.appendChild(chip);
+  });
+  if (verification.summary.repaired) {
+    const repaired = document.createElement("span");
+    repaired.className = "trust-chip";
+    repaired.textContent = `${verification.summary.repaired} corrected`;
+    box.appendChild(repaired);
+  }
+  const sources = document.createElement("div");
+  sources.className = "verification-sources";
+  sources.textContent = verification.evidence_sources.length
+    ? `Checked against: ${verification.evidence_sources.join(", ")}`
+    : "No independent source was available to check against.";
+  box.appendChild(sources);
+  return box;
+}
+
+function renderFieldChecks(fields) {
+  const entries = Object.entries(fields);
+  const wrap = document.createElement("div");
+  wrap.className = "table-preview-card";
+  const scrollBox = document.createElement("div");
+  scrollBox.className = "table-scroll-box";
+  const table = document.createElement("table");
+  table.className = "extracted-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["Field", "Value", "Status", "Evidence"].forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  head.appendChild(headRow);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  entries.forEach(([path, field]) => {
+    const tr = document.createElement("tr");
+    [path.replace(/^key_info\./, ""), field.value ?? "", STATUS_LABELS[field.status], (field.evidence || []).join("; ")].forEach((text, i) => {
+      const td = document.createElement("td");
+      td.textContent = String(text);
+      if (i === 2) td.className = statusClass(field.status);
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  scrollBox.appendChild(table);
+  wrap.appendChild(scrollBox);
+  return wrap;
+}
+
+function renderTablePreview(tbl, idx, tableCheck) {
   const wrap = document.createElement("div");
   wrap.className = "table-preview-card";
 
@@ -296,9 +367,14 @@ function renderTablePreview(tbl, idx) {
   if (Array.isArray(tbl.headers) && tbl.headers.length) {
     const thead = document.createElement("thead");
     const tr = document.createElement("tr");
-    tbl.headers.forEach((h) => {
+    tbl.headers.forEach((h, hIdx) => {
       const th = document.createElement("th");
       th.textContent = h;
+      const headerCheck = tableCheck && tableCheck.headers && tableCheck.headers[hIdx];
+      if (headerCheck && headerCheck.status === "conflict") {
+        th.classList.add("trust-header-conflict");
+        th.title = headerCheck.evidence.join("\n");
+      }
       tr.appendChild(th);
     });
     thead.appendChild(tr);
@@ -307,7 +383,7 @@ function renderTablePreview(tbl, idx) {
 
   if (Array.isArray(tbl.rows) && tbl.rows.length) {
     const tbody = document.createElement("tbody");
-    tbl.rows.forEach((r) => {
+    tbl.rows.forEach((r, rIdx) => {
       const tr = document.createElement("tr");
       const isTotal = (r || []).slice(0, 3).some((c) => /total|subtotal/i.test(String(c)));
       if (isTotal) tr.className = "total-row";
@@ -316,6 +392,11 @@ function renderTablePreview(tbl, idx) {
         td.textContent = c !== null && c !== undefined ? String(c) : "";
         if (/^-?\d+(\.\d+)?$/.test(String(c).trim())) {
           td.className = "cell-num";
+        }
+        const check = tableCheck && tableCheck.cells && tableCheck.cells[rIdx] && tableCheck.cells[rIdx][cIdx];
+        if (check) {
+          td.classList.add(statusClass(check.status));
+          if (check.evidence && check.evidence.length) td.title = check.evidence.join("\n");
         }
         tr.appendChild(td);
       });
@@ -362,14 +443,6 @@ function renderResult(row, data) {
     timing.textContent = `⏱ ${data.elapsed_seconds}s`;
     header.appendChild(timing);
   }
-  if (data.tools_used && data.tools_used.length) {
-    const tool = document.createElement("span");
-    tool.className = "tool-badge";
-    const counts = {};
-    data.tools_used.forEach((t) => (counts[t.name] = (counts[t.name] || 0) + 1));
-    tool.textContent = `🔧 ${Object.entries(counts).map(([n, c]) => `${n} ×${c}`).join(", ")}`;
-    header.appendChild(tool);
-  }
   if (data.suggested_filename || data.original_filename) {
     const fnBadge = document.createElement("span");
     fnBadge.className = "filename-badge";
@@ -380,6 +453,35 @@ function renderResult(row, data) {
   }
   card.appendChild(header);
 
+  if (data.record && data.record.id) {
+    const saved = document.createElement("a");
+    saved.className = "saved-record-link";
+    saved.href = `/records?open=${encodeURIComponent(data.record.id)}`;
+    saved.textContent = "Saved to Records ↗";
+    card.appendChild(saved);
+  }
+
+  const repairs = (data.parsed && data.parsed.verification && data.parsed.verification.repairs) || [];
+  if (data.timing && (data.timing.repair_calls || repairs.length)) {
+    const note = document.createElement("div");
+    note.className = "verification-sources";
+    note.textContent = data.timing.repair_calls
+      ? `Re-read flagged cells in ${data.timing.repair_seconds}s (${data.timing.repair_calls} model call(s)) and corrected ${repairs.length} value(s).`
+      : `Corrected ${repairs.length} value(s) from the model's second-choice digits, with no extra model call.`;
+    card.appendChild(note);
+  }
+
+  if (Array.isArray(data.warnings) && data.warnings.length) {
+    const warningBox = document.createElement("ul");
+    warningBox.className = "warning-box";
+    data.warnings.forEach((warning) => {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      warningBox.appendChild(item);
+    });
+    card.appendChild(warningBox);
+  }
+
   if (data.parsed) {
     if (data.parsed.summary) {
       const summary = document.createElement("div");
@@ -388,11 +490,18 @@ function renderResult(row, data) {
       card.appendChild(summary);
     }
 
+    const verification = data.parsed.verification;
+    if (verification) card.appendChild(renderVerificationSummary(verification));
+
     // Render interactive table preview if tables exist
     if (Array.isArray(data.parsed.tables) && data.parsed.tables.length > 0) {
       data.parsed.tables.forEach((tbl, idx) => {
-        card.appendChild(renderTablePreview(tbl, idx));
+        card.appendChild(renderTablePreview(tbl, idx, verification && verification.tables[idx]));
       });
+    }
+
+    if (verification && Object.keys(verification.fields).length) {
+      card.appendChild(renderFieldChecks(verification.fields));
     }
 
     const toolbar = document.createElement("div");
@@ -553,7 +662,9 @@ function renderResult(row, data) {
 
     const pre = document.createElement("pre");
     pre.className = "json-view";
-    pre.innerHTML = syntaxHighlight(data.parsed);
+    // Per-cell checks are already shown above and would bury the extracted data here.
+    const { verification: _shownAbove, ...extracted } = data.parsed;
+    pre.innerHTML = syntaxHighlight(extracted);
     card.appendChild(pre);
   } else {
     const warn = document.createElement("div");

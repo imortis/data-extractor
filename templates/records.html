@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Records · Data Extractor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/records.css" />
+</head>
+<body class="records-body">
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <header class="topbar records-topbar">
+    <div class="brand">
+      <span class="brand-mark">◈</span>
+      <div class="brand-text">
+        <span class="brand-title">Records</span>
+        <span class="brand-sub">everything extracted, in one place</span>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="import-btn" class="btn">Import files</button>
+      <input id="import-input" type="file" accept=".xlsx,.xlsm,.json" multiple hidden />
+      <a class="btn btn-primary records-link" href="/">Extract new</a>
+    </div>
+  </header>
+
+  <main class="records-main">
+    <div class="records-controls">
+      <div class="search-box">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input id="search-input" type="search" autocomplete="off" aria-label="Search records"
+          placeholder="Search names, USNs, courses, codes, anything inside a table…" />
+        <kbd>/</kbd>
+      </div>
+      <select id="category-filter" aria-label="Filter by document type"></select>
+    </div>
+
+    <div id="group-tabs" class="group-tabs" role="tablist" aria-label="Filter by group"></div>
+    <p id="results-line" class="results-line" aria-live="polite"></p>
+    <div id="cards" class="record-grid"></div>
+    <div id="empty" class="records-empty hidden"></div>
+  </main>
+
+  <div id="detail" class="detail-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="detail-panel">
+      <div class="detail-head">
+        <div>
+          <h2 id="detail-title"></h2>
+          <p id="detail-sub"></p>
+        </div>
+        <button id="detail-close" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+      <div id="detail-body" class="detail-body"></div>
+    </div>
+  </div>
+
+  <script src="/static/records.js"></script>
+</body>
+</html>
